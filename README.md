@@ -132,7 +132,7 @@ docker build -t simpledeploy:latest .
 ## Requirements
 
 - Linux server (Ubuntu/Debian/CentOS/Fedora recommended)
-- Go 1.22+ (for building)
+- Go 1.26+ (for building)
 - Docker Engine (auto-installed by `simpledeploy init`)
 
 ## Security
