@@ -323,6 +323,66 @@ func TestGenerate_CaddyWithHeaders(t *testing.T) {
 	}
 }
 
+func TestWriteCompose_InvalidPath(t *testing.T) {
+	// Create a read-only file and try to use it as a directory
+	tmpFile := filepath.Join(t.TempDir(), "readonly-file")
+	os.WriteFile(tmpFile, []byte("x"), 0444)
+
+	// Try to write compose into the file (can't create dir inside a file)
+	err := WriteCompose(tmpFile+"/nested/dir", "test: true\n")
+	if err == nil {
+		t.Skip("Platform allows writing into file paths")
+	}
+}
+
+func TestGenerate_TraefikWithHeaders(t *testing.T) {
+	data := &ComposeData{
+		AppName:     "hdrapp",
+		Image:       "hdrapp:v1",
+		Port:        3000,
+		Domain:      "hdrapp.example.com",
+		ProxyType:   "traefik",
+		Headers:     map[string]string{"X-Frame-Options": "DENY", "X-Custom": "value"},
+		Repo:        "https://github.com/test/app.git",
+		Branch:      "main",
+		GeneratedAt: "2024-01-15T10:30:00Z",
+	}
+
+	yaml := Generate(data)
+
+	if !strings.Contains(yaml, "traefik.http.middlewares.hdrapp-headers") {
+		t.Error("Should contain headers middleware")
+	}
+	if !strings.Contains(yaml, "X-Frame-Options=DENY") {
+		t.Error("Should contain X-Frame-Options header")
+	}
+	if !strings.Contains(yaml, "routers.hdrapp.middlewares=hdrapp-headers") {
+		t.Error("Should apply headers middleware to router")
+	}
+}
+
+func TestGenerate_EnvFile(t *testing.T) {
+	data := &ComposeData{
+		AppName:     "envapp",
+		Image:       "envapp:v1",
+		Port:        3000,
+		Domain:      "envapp.example.com",
+		ProxyType:   "traefik",
+		EnvFile:     "/opt/simpledeploy/apps/envapp/.env",
+		Repo:        "https://github.com/test/app.git",
+		Branch:      "main",
+		GeneratedAt: "2024-01-15T10:30:00Z",
+	}
+
+	yaml := Generate(data)
+	if !strings.Contains(yaml, "env_file:") {
+		t.Error("Should contain env_file directive")
+	}
+	if !strings.Contains(yaml, "/opt/simpledeploy/apps/envapp/.env") {
+		t.Error("Should contain env file path")
+	}
+}
+
 func TestNewComposeData_SetsFields(t *testing.T) {
 	app := &state.AppConfig{
 		Name:         "myapp",

@@ -143,6 +143,73 @@ func TestLogDeploy_InvalidDir(t *testing.T) {
 	logDeploy("/nonexistent/path/that/does/not/exist", "app", "app:v1")
 }
 
+func TestLogDeploy_EmptyAppName(t *testing.T) {
+	dir := t.TempDir()
+	// Should not panic with empty values
+	logDeploy(dir, "", "")
+}
+
+func TestReplaceAppImage_MultipleImages(t *testing.T) {
+	input := `services:
+  myapp:
+    image: myapp:old
+    ports:
+      - "3000:3000"
+  db:
+    image: mysql:8
+  myapp-db:
+    image: redis:7
+`
+	result := replaceAppImage(input, "myapp", "myapp:new")
+	if !strings.Contains(result, "image: myapp:new") {
+		t.Error("Should replace myapp image")
+	}
+	if !strings.Contains(result, "image: mysql:8") {
+		t.Error("Should NOT replace mysql image")
+	}
+	if !strings.Contains(result, "image: redis:7") {
+		t.Error("Should NOT replace redis image")
+	}
+}
+
+func TestReplaceAppImage_NoMatchingService(t *testing.T) {
+	input := "services:\n  otherapp:\n    image: other:old\n"
+	result := replaceAppImage(input, "myapp", "myapp:new")
+	if result != input {
+		t.Error("Should not modify when app service not found")
+	}
+}
+
+func TestReplaceAppImage_EmptyContent(t *testing.T) {
+	result := replaceAppImage("", "myapp", "myapp:new")
+	if result != "" {
+		t.Error("Should return empty for empty input")
+	}
+}
+
+func TestBuildComposeData_EncryptionError(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	app := state.NewAppConfig()
+	app.Name = "encapp"
+	app.Port = 3000
+	app.Type = "node"
+	app.Domain = "encapp.example.com"
+	app.Repo = "https://github.com/test/app.git"
+	app.Databases = []string{"mysql"}
+	// Set invalid encrypted credentials — decryption should handle gracefully
+	app.DBCredentials = map[string]string{"mysql": "invalid-encrypted-value"}
+	app.Headers = map[string]string{}
+
+	cfg := &state.GlobalConfig{Proxy: "traefik"}
+
+	data := buildComposeData(app, cfg, []string{"qd-encapp-mysql-data"}, map[string]string{})
+	if len(data.Databases) != 1 {
+		t.Error("Should still create DB service even with bad credentials")
+	}
+}
+
 func TestBuildComposeData(t *testing.T) {
 	dir := t.TempDir()
 	state.InitState(dir)
