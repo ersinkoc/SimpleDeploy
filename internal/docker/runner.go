@@ -1,29 +1,45 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
+const composeTimeout = 5 * time.Minute
+
 func ComposeUp(composeDir string) error {
-	cmd := exec.Command("docker", "compose", "up", "-d")
+	ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "compose", "up", "-d")
 	cmd.Dir = composeDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("docker compose up timed out after %v", composeTimeout)
+		}
 		return fmt.Errorf("docker compose up failed: %w", err)
 	}
 	return nil
 }
 
 func ComposeDown(composeDir string) error {
-	cmd := exec.Command("docker", "compose", "down")
+	ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "compose", "down")
 	cmd.Dir = composeDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("docker compose down timed out after %v", composeTimeout)
+		}
 		return fmt.Errorf("docker compose down failed: %w", err)
 	}
 	return nil
@@ -34,11 +50,21 @@ func ComposeRemove(composeDir string, volumes bool) error {
 	if volumes {
 		args = append(args, "-v")
 	}
-	cmd := exec.Command("docker", args...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = composeDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("docker compose down timed out after %v", composeTimeout)
+		}
+		return err
+	}
+	return nil
 }
 
 func ComposeLogs(composeDir, serviceName string, follow bool) error {
@@ -49,7 +75,20 @@ func ComposeLogs(composeDir, serviceName string, follow bool) error {
 	if serviceName != "" {
 		args = append(args, serviceName)
 	}
-	cmd := exec.Command("docker", args...)
+
+	// No timeout for follow mode — user controls when to stop
+	if follow {
+		cmd := exec.Command("docker", args...)
+		cmd.Dir = composeDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = composeDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -57,7 +96,10 @@ func ComposeLogs(composeDir, serviceName string, follow bool) error {
 }
 
 func ContainerStatus(containerName string) (string, error) {
-	cmd := exec.Command("docker", "inspect", "-f", "{{.State.Status}}", containerName)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Status}}", containerName)
 	output, err := cmd.Output()
 	if err != nil {
 		return "not found", nil
@@ -71,29 +113,39 @@ func ContainerExists(containerName string) bool {
 }
 
 func RestartContainer(containerName string) error {
-	cmd := exec.Command("docker", "restart", containerName)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "restart", containerName)
 	return cmd.Run()
 }
 
 func StopContainer(containerName string) error {
-	cmd := exec.Command("docker", "stop", containerName)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "stop", containerName)
 	return cmd.Run()
 }
 
 func ExecContainer(containerName string, cmdArgs ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
 	args := append([]string{"exec", containerName}, cmdArgs...)
-	cmd := exec.Command("docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func ListContainers(labelFilter string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	args := []string{"ps", "--format", "{{.Names}}"}
 	if labelFilter != "" {
 		args = append(args, "--filter", fmt.Sprintf("label=%s", labelFilter))
 	}
-	cmd := exec.Command("docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -118,7 +170,10 @@ func Run(args []string) error {
 }
 
 func RunOutput(args []string) (string, error) {
-	cmd := exec.Command("docker", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }

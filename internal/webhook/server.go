@@ -5,11 +5,18 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
+
+var validAppNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`)
+
+func isValidAppName(name string) bool {
+	return validAppNameRe.MatchString(name)
+}
 
 type Server struct {
 	Port   int
@@ -55,7 +62,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Extract app name from path: /_qd/webhook/{app-name}
 	path := strings.TrimPrefix(r.URL.Path, "/_qd/webhook/")
 	appName := strings.TrimSpace(path)
-	if appName == "" {
+	if appName == "" || !isValidAppName(appName) {
 		http.Error(w, "App name required", http.StatusBadRequest)
 		return
 	}

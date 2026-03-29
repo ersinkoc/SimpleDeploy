@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,12 @@ func RunDeploy() error {
 	// 2. App name
 	parts := strings.Split(app.Repo, "/")
 	defaultName := strings.TrimSuffix(parts[len(parts)-1], ".git")
+	defaultName = sanitizeDefaultName(defaultName)
 	app.Name = wizard.Ask("Application name", defaultName)
+
+	if err := state.ValidateAppName(app.Name); err != nil {
+		return err
+	}
 
 	if existing, _ := state.GetApp(app.Name); existing != nil {
 		return fmt.Errorf("application '%s' already exists. Use 'simpledeploy redeploy %s' to update", app.Name, app.Name)
@@ -251,6 +257,9 @@ func RunDeploy() error {
 	// Start containers
 	wizard.Info("Starting containers...")
 	if err := docker.ComposeUp(appDir); err != nil {
+		wizard.Warn("Failed to start containers. Rolling back...")
+		// Attempt rollback: remove compose and clean up
+		_ = docker.ComposeDown(appDir)
 		return fmt.Errorf("failed to start containers: %w", err)
 	}
 	wizard.Success("Containers started")
@@ -385,4 +394,20 @@ func logDeploy(appDir, appName, imageTag string) {
 	if _, err := f.WriteString(logLine); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to write deploy log: %v\n", err)
 	}
+}
+
+var sanitizeNameRe = regexp.MustCompile(`[^a-z0-9-]`)
+
+// sanitizeDefaultName converts a repo-derived name into a safe default app name.
+func sanitizeDefaultName(name string) string {
+	name = strings.ToLower(name)
+	name = sanitizeNameRe.ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-")
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	if name == "" {
+		name = "app"
+	}
+	return name
 }

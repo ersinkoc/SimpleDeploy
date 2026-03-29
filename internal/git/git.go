@@ -24,6 +24,7 @@ func Clone(repoURL, branch, destDir, token string) error {
 		cmd.Env = append(os.Environ(),
 			"GIT_ASKPASS="+askpass,
 			"GIT_TERMINAL_PROMPT=0",
+			"QD_GIT_TOKEN="+token,
 		)
 	}
 
@@ -76,7 +77,8 @@ func writeAskpassScript(token string) (path string, cleanup func(), err error) {
 	if err != nil {
 		return "", nil, err
 	}
-	script := "#!/bin/sh\necho '" + token + "'\n"
+	// Use printf to avoid single-quote injection in the token value
+	script := "#!/bin/sh\nprintf '%s\\n' \"$QD_GIT_TOKEN\"\n"
 	if _, err := f.WriteString(script); err != nil {
 		f.Close()
 		os.Remove(f.Name())
@@ -84,7 +86,10 @@ func writeAskpassScript(token string) (path string, cleanup func(), err error) {
 	}
 	f.Chmod(0700)
 	f.Close()
-	return f.Name(), func() { os.Remove(f.Name()) }, nil
+
+	// Return the token via environment variable instead of embedding in script
+	cleanup = func() { os.Remove(f.Name()) }
+	return f.Name(), cleanup, nil
 }
 
 // sanitizeOutput removes any token-like strings from git output.

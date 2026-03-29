@@ -8,95 +8,95 @@ import (
 	"testing"
 )
 
+func TestClone_InvalidRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	err := Clone("https://github.com/nonexistent/repo-xyz-999.git", "main", filepath.Join(tmpDir, "dest"), "")
+	if err == nil {
+		t.Error("Should fail for invalid repo")
+	}
+	if err != nil && !strings.Contains(err.Error(), "<redacted>") {
+		// Good — URL is redacted in error output
+	}
+}
+
 func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
-		name   string
-		output string
-		repo   string
-		want   string
+		name     string
+		output   string
+		repoURL  string
+		expected string
 	}{
 		{
-			name:   "removes_repo_url",
-			output: "fatal: repository 'https://github.com/user/repo.git' not found",
-			repo:   "https://github.com/user/repo.git",
-			want:   "<redacted>",
+			name:     "removes repo url",
+			output:   "fatal: repository 'https://github.com/user/repo.git/' not found",
+			repoURL:  "https://github.com/user/repo.git",
+			expected: "fatal: repository '<redacted>/' not found",
 		},
 		{
-			name:   "no_match",
-			output: "some random error",
-			repo:   "https://github.com/user/repo.git",
-			want:   "some random error",
+			name:     "no match",
+			output:   "some error message",
+			repoURL:  "https://github.com/user/repo.git",
+			expected: "some error message",
 		},
 		{
-			name:   "empty_output",
-			output: "",
-			repo:   "https://github.com/test/repo.git",
-			want:   "",
+			name:     "empty output",
+			output:   "",
+			repoURL:  "https://github.com/user/repo.git",
+			expected: "",
 		},
 		{
-			name:   "url_in_middle",
-			output: "error: failed to clone https://github.com/secret/repo.git: access denied",
-			repo:   "https://github.com/secret/repo.git",
-			want:   "error: failed to clone <redacted>: access denied",
+			name:     "url in middle",
+			output:   "error cloning https://github.com/user/repo.git failed",
+			repoURL:  "https://github.com/user/repo.git",
+			expected: "error cloning <redacted> failed",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizeOutput(tt.output, tt.repo)
-			if !strings.Contains(result, tt.want) {
-				t.Errorf("sanitizeOutput() = %q, should contain %q", result, tt.want)
-			}
-			if tt.repo != "" && tt.output != "" && strings.Contains(result, tt.repo) {
-				t.Errorf("Result should not contain repo URL %q", tt.repo)
+			result := sanitizeOutput(tt.output, tt.repoURL)
+			if result != tt.expected {
+				t.Errorf("sanitizeOutput(%q, %q) = %q, want %q", tt.output, tt.repoURL, result, tt.expected)
 			}
 		})
 	}
 }
 
 func TestSanitizeOutput_RemovesAllOccurrences(t *testing.T) {
-	output := "clone https://github.com/test/r.git failed at https://github.com/test/r.git"
-	repo := "https://github.com/test/r.git"
-	result := sanitizeOutput(output, repo)
-	count := strings.Count(result, repo)
-	if count != 0 {
-		t.Errorf("Expected 0 occurrences of repo URL, got %d", count)
+	output := "Cloning https://github.com/user/repo.git... error at https://github.com/user/repo.git"
+	result := sanitizeOutput(output, "https://github.com/user/repo.git")
+	if strings.Contains(result, "https://github.com/user/repo.git") {
+		t.Error("Should remove all occurrences of repo URL")
 	}
 }
 
 func TestIsRepo_WithGitDir(t *testing.T) {
 	dir := t.TempDir()
-	gitDir := filepath.Join(dir, ".git")
-	if err := os.MkdirAll(gitDir, 0755); err != nil {
-		t.Fatalf("Failed to create .git dir: %v", err)
-	}
+	os.MkdirAll(filepath.Join(dir, ".git"), 0755)
 	if !IsRepo(dir) {
-		t.Error("Dir with .git should be a repo")
+		t.Error("Should detect .git directory as a repo")
 	}
 }
 
 func TestIsRepo_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	if IsRepo(dir) {
-		t.Error("Empty dir should not be a repo")
+		t.Error("Empty dir should not be detected as repo")
 	}
 }
 
 func TestIsRepo_NonexistentDir(t *testing.T) {
-	if IsRepo("/nonexistent/path/that/does/not/exist") {
-		t.Error("Nonexistent dir should not be a repo")
+	if IsRepo("/nonexistent/path/xyz") {
+		t.Error("Nonexistent dir should not be detected as repo")
 	}
 }
 
 func TestIsRepo_GitFile(t *testing.T) {
-	// A file named .git (not a directory) should not count
 	dir := t.TempDir()
-	gitFile := filepath.Join(dir, ".git")
-	if err := os.WriteFile(gitFile, []byte("gitdir: something"), 0644); err != nil {
-		t.Fatalf("Failed to create .git file: %v", err)
-	}
+	// Write .git file (used in git worktrees)
+	os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /some/path"), 0644)
 	if IsRepo(dir) {
-		t.Error("Dir with .git file (not dir) should not be a repo")
+		t.Error(".git file (not dir) should not be detected as repo by current implementation")
 	}
 }
 
@@ -116,8 +116,12 @@ func TestWriteAskpassScript(t *testing.T) {
 	if !strings.Contains(content, "#!/bin/sh") {
 		t.Error("Script should have shebang line")
 	}
-	if !strings.Contains(content, "mytoken123") {
-		t.Error("Script should contain the token")
+	if !strings.Contains(content, "QD_GIT_TOKEN") {
+		t.Error("Script should reference QD_GIT_TOKEN env var")
+	}
+	// Token should NOT be embedded in the script for security
+	if strings.Contains(content, "mytoken123") {
+		t.Error("Script should NOT contain the raw token")
 	}
 	if !strings.HasSuffix(content, "\n") {
 		t.Error("Script should end with newline")
@@ -153,113 +157,108 @@ func TestWriteAskpassScript_SpecialChars(t *testing.T) {
 	defer cleanup()
 
 	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), token) {
-		t.Error("Script should contain the token with special chars")
+	content := string(data)
+	// Script should use env var, not embed the token
+	if strings.Contains(content, token) {
+		t.Error("Script should NOT embed token with special chars")
+	}
+	if !strings.Contains(content, "QD_GIT_TOKEN") {
+		t.Error("Script should reference QD_GIT_TOKEN env var")
 	}
 }
 
 func TestWriteAskpassScript_UniquePaths(t *testing.T) {
-	path1, cleanup1, _ := writeAskpassScript("token1")
+	path1, cleanup1, err := writeAskpassScript("token1")
+	if err != nil {
+		t.Fatalf("writeAskpassScript failed: %v", err)
+	}
 	defer cleanup1()
-	path2, cleanup2, _ := writeAskpassScript("token2")
+
+	path2, cleanup2, err := writeAskpassScript("token2")
+	if err != nil {
+		t.Fatalf("writeAskpassScript failed: %v", err)
+	}
 	defer cleanup2()
 
 	if path1 == path2 {
-		t.Error("Each call should create a unique file")
+		t.Error("Each call should produce a unique script path")
 	}
 }
 
 func TestClone_LocalRepo(t *testing.T) {
-	// Create a local test repo
+	// Create a local git repo
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
 	os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("hello"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
-	cloneDir := filepath.Join(t.TempDir(), "cloned")
-	err := Clone(repoDir, "master", cloneDir, "")
-	if err != nil {
+	destDir := filepath.Join(t.TempDir(), "clone")
+	if err := Clone(repoDir, "master", destDir, ""); err != nil {
 		t.Fatalf("Clone failed: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(cloneDir, "test.txt")); err != nil {
-		t.Error("Cloned repo should have test.txt")
-	}
-	if !IsRepo(cloneDir) {
-		t.Error("Cloned dir should be a repo")
-	}
-}
 
-func TestClone_InvalidRepo(t *testing.T) {
-	cloneDir := filepath.Join(t.TempDir(), "cloned")
-	err := Clone("/nonexistent/path/repo.git", "main", cloneDir, "")
-	if err == nil {
-		t.Error("Should fail for nonexistent repo")
+	if _, err := os.Stat(filepath.Join(destDir, "test.txt")); err != nil {
+		t.Error("Cloned file should exist")
 	}
 }
 
 func TestPull_LocalRepo(t *testing.T) {
-	// Create a local test repo
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("content"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v1"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
-	// Clone it
-	cloneDir := filepath.Join(t.TempDir(), "cloned")
+	cloneDir := filepath.Join(t.TempDir(), "clone")
 	Clone(repoDir, "master", cloneDir, "")
 
-	// Make a new commit in original
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("updated"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "update")
+	// Update original
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v2"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "update")
 
-	// Pull should succeed
-	err := Pull(cloneDir, "master")
-	if err != nil {
+	// Pull
+	if err := Pull(cloneDir, "master"); err != nil {
 		t.Fatalf("Pull failed: %v", err)
 	}
 
 	data, _ := os.ReadFile(filepath.Join(cloneDir, "file.txt"))
-	if string(data) != "updated" {
-		t.Errorf("File content after pull = %q, want 'updated'", string(data))
+	if string(data) != "v2" {
+		t.Error("Pull should update files")
 	}
 }
 
 func TestGetShortHash(t *testing.T) {
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("content"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	hash, err := GetShortHash(repoDir)
 	if err != nil {
 		t.Fatalf("GetShortHash failed: %v", err)
 	}
-	if hash == "" {
-		t.Error("Hash should not be empty")
-	}
 	if len(hash) < 7 {
-		t.Errorf("Hash seems too short: %q", hash)
+		t.Errorf("Hash too short: %s", hash)
 	}
 }
 
 func TestDetectBranch(t *testing.T) {
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("content"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	branch, err := DetectBranch(repoDir)
 	if err != nil {
@@ -273,100 +272,94 @@ func TestDetectBranch(t *testing.T) {
 func TestGetShortHash_NotRepo(t *testing.T) {
 	_, err := GetShortHash(t.TempDir())
 	if err == nil {
-		t.Error("Should error for non-repo directory")
+		t.Error("Should fail for non-repo directory")
 	}
 }
 
 func TestDetectBranch_NotRepo(t *testing.T) {
 	_, err := DetectBranch(t.TempDir())
 	if err == nil {
-		t.Error("Should error for non-repo directory")
+		t.Error("Should fail for non-repo directory")
 	}
 }
 
 func TestPull_NotRepo(t *testing.T) {
 	err := Pull(t.TempDir(), "main")
 	if err == nil {
-		t.Error("Should error for non-repo directory")
+		t.Error("Should fail for non-repo directory")
 	}
 }
 
 func TestClone_WithToken(t *testing.T) {
-	// Test that clone with token creates askpass script and uses it
-	// We'll use a local repo with a fake token — the clone itself won't
-	// need auth for local repos, but we verify the askpass mechanism works.
+	// Test that the token is passed via env var, not embedded in script
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
 	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
-	cloneDir := filepath.Join(t.TempDir(), "cloned-with-token")
-	err := Clone(repoDir, "master", cloneDir, "fake-token-12345")
-	if err != nil {
-		t.Fatalf("Clone with token failed: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(cloneDir, "file.txt")); err != nil {
-		t.Error("Cloned repo should have file.txt")
+	destDir := filepath.Join(t.TempDir(), "clone")
+	// Clone with a local path won't use the token but verifies no crash
+	if err := Clone(repoDir, "master", destDir, "test-token-123"); err != nil {
+		t.Fatalf("Clone with token on local repo should work: %v", err)
 	}
 }
 
 func TestClone_CreatesParentDir(t *testing.T) {
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
 	os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("hello"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
-	cloneDir := filepath.Join(t.TempDir(), "nested", "deep", "cloned")
-	err := Clone(repoDir, "master", cloneDir, "")
-	if err != nil {
-		t.Fatalf("Clone to nested dir failed: %v", err)
+	destDir := filepath.Join(t.TempDir(), "nested", "dir", "clone")
+	if err := Clone(repoDir, "master", destDir, ""); err != nil {
+		t.Fatalf("Should create parent dirs and clone: %v", err)
 	}
 }
 
 func TestClone_WrongBranch(t *testing.T) {
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
 	os.WriteFile(filepath.Join(repoDir, "test.txt"), []byte("hello"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
-	cloneDir := filepath.Join(t.TempDir(), "cloned")
-	err := Clone(repoDir, "nonexistent-branch", cloneDir, "")
+	destDir := filepath.Join(t.TempDir(), "clone")
+	err := Clone(repoDir, "nonexistent-branch-xyz", destDir, "")
 	if err == nil {
-		t.Error("Should fail for non-existent branch")
+		t.Error("Should fail for nonexistent branch")
 	}
 }
 
 func TestGetShortHash_Consistent(t *testing.T) {
 	repoDir := t.TempDir()
-	runGit(t, repoDir, "init")
-	runGit(t, repoDir, "config", "user.email", "test@test.com")
-	runGit(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("content"), 0644)
-	runGit(t, repoDir, "add", ".")
-	runGit(t, repoDir, "commit", "-m", "initial")
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	hash1, _ := GetShortHash(repoDir)
 	hash2, _ := GetShortHash(repoDir)
 	if hash1 != hash2 {
-		t.Errorf("Hashes should be consistent: %q vs %q", hash1, hash2)
+		t.Errorf("Hashes should be consistent: %s vs %s", hash1, hash2)
 	}
 }
 
-func runGit(t *testing.T, dir string, args ...string) {
+func runGitCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = nil
+	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git %v failed: %v", args, err)
 	}

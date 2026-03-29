@@ -4,22 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
-const (
-	version = "0.0.1"
-	banner  = `
-  ____                  _              ____
- / ___|  ___ _   _ ___| |_ ___  _ __ |  _ \ _____   _____
- \___ \ / __| | | / __| __/ _ \| '_ \| |_) / _ \ \ / / _ \
-  ___) | (__| |_| \__ \ || (_) | | | |  _ <  __/\ V /  __/
- |____/ \___|\__,_|___/\__\___/|_| |_|_| \_\___| \_/ \___|
-`
-)
+const version = "0.0.1"
 
 func PrintUsage() {
-	fmt.Print(banner)
-	fmt.Println()
 	fmt.Printf("SimpleDeploy v%s — Single-Binary PaaS CLI\n", version)
 	fmt.Println("Author: Ersin KOC — https://x.com/ersinkoc")
 	fmt.Println()
@@ -87,7 +78,11 @@ func appNameFromArgs(args []string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("application name required. Usage: simpledeploy <command> <app-name>")
 	}
-	return args[0], nil
+	name := args[0]
+	if err := state.ValidateAppName(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func homeDir() string {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
@@ -165,7 +166,7 @@ func NewComposeData(app *state.AppConfig, cfg *state.GlobalConfig) *ComposeData 
 		Port:        app.Port,
 		Domain:      app.Domain,
 		ProxyType:   cfg.Proxy,
-		EnvFile:     fmt.Sprintf("/opt/simpledeploy/apps/%s/.env", app.Name),
+		EnvFile:     filepath.Join(cfgpkg.AppDir(app.Name), ".env"),
 		Environment: make(map[string]string),
 		Databases:   []DBService{},
 		Headers:     app.Headers,
