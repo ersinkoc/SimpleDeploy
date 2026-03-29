@@ -220,3 +220,54 @@ func TestServer_StartAndHealthCheck(t *testing.T) {
 		t.Errorf("Health status = %d, want 200", resp.StatusCode)
 	}
 }
+
+func TestIsValidAppName(t *testing.T) {
+	valid := []string{"myapp", "my-app-123", "ab", "app123app"}
+	for _, name := range valid {
+		if !isValidAppName(name) {
+			t.Errorf("isValidAppName(%q) should be true", name)
+		}
+	}
+
+	invalid := []string{"", "a", "MyApp", "my app", "../etc", "my_app", "-app", "app-"}
+	for _, name := range invalid {
+		if isValidAppName(name) {
+			t.Errorf("isValidAppName(%q) should be false", name)
+		}
+	}
+}
+
+func TestWebhook_InvalidAppName(t *testing.T) {
+	srv := NewServer(0, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/../etc", strings.NewReader(`{}`))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid app name, got %d", rec.Code)
+	}
+}
+
+func TestWebhook_EmptyAppName(t *testing.T) {
+	srv := NewServer(0, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/", strings.NewReader(`{}`))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for empty app name, got %d", rec.Code)
+	}
+}
+
+func TestWebhook_WrongMethod(t *testing.T) {
+	srv := NewServer(0, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/_qd/webhook/myapp", nil)
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405 for GET, got %d", rec.Code)
+	}
+}
