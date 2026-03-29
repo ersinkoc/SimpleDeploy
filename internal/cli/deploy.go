@@ -308,12 +308,16 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 			continue
 		}
 
+		volName := ""
+		if i < len(volumes) {
+			volName = volumes[i]
+		}
 		dbSvc := compose.DBService{
 			Type:       dbType,
 			Image:      dbCfg.Image,
 			Container:  dbCfg.Container,
 			Volume:     dbCfg.Volume,
-			VolumeName: volumes[i],
+			VolumeName: volName,
 			Env:        make(map[string]string),
 		}
 

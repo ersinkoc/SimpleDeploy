@@ -9,7 +9,7 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
-const ServiceDir = "/opt/simpledeploy/service"
+var ServiceDir = "/opt/simpledeploy/service"
 
 func InstallService(baseDomain string, webhookPort int) error {
 	wizard.Info("Installing SimpleDeploy as a service...")

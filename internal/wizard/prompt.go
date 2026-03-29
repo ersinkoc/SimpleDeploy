@@ -10,6 +10,12 @@ import (
 
 var scanner = bufio.NewScanner(os.Stdin)
 
+// SetScannerForTesting replaces the global scanner with the given one.
+// This is intended ONLY for use in tests to simulate user input.
+func SetScannerForTesting(s *bufio.Scanner) {
+	scanner = s
+}
+
 func Ask(prompt, defaultVal string) string {
 	if defaultVal != "" {
 		fmt.Printf("%s [%s]: ", prompt, defaultVal)

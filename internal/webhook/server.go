@@ -74,8 +74,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse event
-	event, branch, _ := ParseGitHubEvent(r)
+	// Parse event from header and branch from already-read body
+	event := r.Header.Get("X-GitHub-Event")
+	ref := extractRefFromPayload(string(body))
+	branch := ""
+	if strings.HasPrefix(ref, "refs/heads/") {
+		branch = strings.TrimPrefix(ref, "refs/heads/")
+	}
 
 	// Check event type
 	if event != "push" {

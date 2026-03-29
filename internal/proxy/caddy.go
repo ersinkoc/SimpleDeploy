@@ -110,6 +110,7 @@ func generateCaddyCompose() string {
 networks:
   simpledeploy:
     name: simpledeploy
+    external: true
 
 services:
   caddy:
