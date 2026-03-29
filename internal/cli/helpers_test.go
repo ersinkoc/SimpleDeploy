@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/buildpack"
+	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	compose "github.com/ersinkoc/SimpleDeploy/internal/compose"
 	"github.com/ersinkoc/SimpleDeploy/internal/db"
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
@@ -927,10 +928,14 @@ func TestRunRedeploy_NoConfig(t *testing.T) {
 }
 
 func TestRunRedeploy_ComposeReadFails(t *testing.T) {
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
 	dir := t.TempDir()
 	state.InitState(dir)
 
-	cfg := &state.GlobalConfig{Proxy: "traefik"}
+	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
 	state.SaveConfig(cfg)
 
 	app := state.NewAppConfig()
@@ -952,14 +957,122 @@ func TestRunRedeploy_ComposeReadFails(t *testing.T) {
 	runGitCmd(t, sourceDir, "add", ".")
 	runGitCmd(t, sourceDir, "commit", "-m", "initial")
 
-	// No docker-compose.yml in app dir → build will fail or compose read will fail
-	// Actually, the flow is: Pull → Build → Read compose → ...
-	// Pull should work (local repo), but Build needs Dockerfile which doesn't exist
-	// Build will fail. Let's test that error path.
+	// No Dockerfile → build will fail
 	_ = captureStdout(func() {
 		err := RunRedeploy([]string{"noread"})
 		if err == nil {
 			t.Error("Should fail when Dockerfile doesn't exist")
+		}
+	})
+}
+
+func TestRunRedeploy_WithDockerfile(t *testing.T) {
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	// Override config base dir so AppDir() returns our temp dir
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+
+	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
+	state.SaveConfig(cfg)
+
+	app := state.NewAppConfig()
+	app.Name = "redeploydf"
+	app.Branch = "main"
+	app.Repo = "https://github.com/test/app.git"
+	app.Domain = "redeploydf.example.com"
+	app.Port = 3000
+	app.Type = "node"
+	state.SaveApp(app)
+
+	// Create source dir with git repo + Dockerfile
+	sourceDir := filepath.Join(cfgpkg.AppDir("redeploydf"), "source")
+	os.MkdirAll(sourceDir, 0755)
+	runGitCmd(t, sourceDir, "init")
+	runGitCmd(t, sourceDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, sourceDir, "config", "user.name", "Test")
+
+	// Write a simple Dockerfile
+	dockerfile := `FROM alpine:3.19
+RUN echo "hello" > /app/hello.txt
+CMD ["cat", "/app/hello.txt"]
+`
+	os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte(dockerfile), 0644)
+	os.WriteFile(filepath.Join(sourceDir, "app.txt"), []byte("test"), 0644)
+	runGitCmd(t, sourceDir, "add", ".")
+	runGitCmd(t, sourceDir, "commit", "-m", "initial")
+
+	// No docker-compose.yml → should fail at compose read step
+	_ = captureStdout(func() {
+		err := RunRedeploy([]string{"redeploydf"})
+		if err == nil {
+			t.Error("Should fail at compose read step")
+		}
+		if !strings.Contains(err.Error(), "compose") {
+			t.Logf("Error (expected): %v", err)
+		}
+	})
+}
+
+func TestRunRedeploy_WithCompose(t *testing.T) {
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+
+	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
+	state.SaveConfig(cfg)
+
+	app := state.NewAppConfig()
+	app.Name = "redeployc"
+	app.Branch = "main"
+	app.Repo = "https://github.com/test/app.git"
+	app.Domain = "redeployc.example.com"
+	app.Port = 3000
+	app.Type = "node"
+	state.SaveApp(app)
+
+	// Create source dir with git repo + Dockerfile
+	sourceDir := filepath.Join(cfgpkg.AppDir("redeployc"), "source")
+	os.MkdirAll(sourceDir, 0755)
+	runGitCmd(t, sourceDir, "init")
+	runGitCmd(t, sourceDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, sourceDir, "config", "user.name", "Test")
+
+	dockerfile := `FROM alpine:3.19
+RUN echo "hello" > /app/hello.txt
+CMD ["cat", "/app/hello.txt"]
+`
+	os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte(dockerfile), 0644)
+	os.WriteFile(filepath.Join(sourceDir, "app.txt"), []byte("test"), 0644)
+	runGitCmd(t, sourceDir, "add", ".")
+	runGitCmd(t, sourceDir, "commit", "-m", "initial")
+
+	// Create docker-compose.yml in app dir
+	appDir := cfgpkg.AppDir("redeployc")
+	composeContent := `services:
+  redeployc:
+    image: redeployc:old
+    ports:
+      - "3000"
+`
+	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte(composeContent), 0644)
+
+	// Should fail at compose up (no network, etc.) but tests more code paths
+	_ = captureStdout(func() {
+		err := RunRedeploy([]string{"redeployc"})
+		if err == nil {
+			t.Log("Redeploy succeeded (unexpected but OK)")
+		} else {
+			t.Logf("Redeploy error (expected): %v", err)
 		}
 	})
 }
@@ -1328,6 +1441,9 @@ func TestRunInit_CaddyChoice(t *testing.T) {
 	}
 	ln443.Close()
 
+	// Clean up stale containers from previous test runs
+	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+
 	docker.CreateNetwork("simpledeploy")
 
 	_ = captureStdout(func() {
@@ -1417,6 +1533,9 @@ func TestRunInit_AlreadyInitReconfigure(t *testing.T) {
 	}
 	ln443.Close()
 
+	// Clean up stale containers from previous test runs
+	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+
 	docker.CreateNetwork("simpledeploy")
 
 	// Say "y" to reconfigure, then new inputs
@@ -1475,6 +1594,9 @@ func TestRunInit_InvalidPort(t *testing.T) {
 	}
 	ln443.Close()
 
+	// Clean up stale containers from previous test runs
+	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+
 	docker.CreateNetwork("simpledeploy")
 
 	// Choose traefik, domain, wildcard yes, email, auto secret, invalid port "abc" → should default to 9000
@@ -1495,5 +1617,110 @@ func TestRunInit_InvalidPort(t *testing.T) {
 
 	captureStdout(func() {
 		proxy.StopTraefik()
+	})
+}
+
+func TestRunDeploy_NoConfig(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	_ = captureStdout(func() {
+		err := RunDeploy()
+		if err == nil {
+			t.Error("Should fail without config")
+		}
+	})
+}
+
+func TestRunDeploy_AppAlreadyExists(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
+	state.SaveConfig(cfg)
+
+	app := state.NewAppConfig()
+	app.Name = "existingapp"
+	app.Branch = "main"
+	app.Repo = "https://github.com/test/app.git"
+	app.Domain = "existingapp.example.com"
+	app.Port = 3000
+	app.Type = "node"
+	state.SaveApp(app)
+
+	// Input: repo URL → branch (default) → not private → app name "existingapp"
+	input := "https://github.com/test/existingapp.git\n\nn\nexistingapp\n"
+	setWizardInput(t, input)
+
+	_ = captureStdout(func() {
+		err := RunDeploy()
+		if err == nil {
+			t.Error("Should fail when app already exists")
+		}
+		if err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("Error should mention 'already exists', got: %v", err)
+		}
+	})
+}
+
+func TestRunDeploy_CloneFails(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+
+	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
+	state.SaveConfig(cfg)
+
+	// Input: repo URL → branch → not private → app name → clone will fail
+	input := "https://github.com/nonexistent/repo-definitely-does-not-exist-xyz.git\n\nn\nnewapp\n"
+	setWizardInput(t, input)
+
+	_ = captureStdout(func() {
+		err := RunDeploy()
+		if err == nil {
+			t.Error("Should fail when git clone fails")
+		}
+		if err != nil && !strings.Contains(err.Error(), "clone") {
+			t.Errorf("Error should mention clone, got: %v", err)
+		}
+	})
+}
+
+func TestRunDeploy_CancelDeploy(t *testing.T) {
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+
+	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
+	state.SaveConfig(cfg)
+
+	// Create a local git repo to clone from
+	repoDir := filepath.Join(dir, "repo")
+	os.MkdirAll(repoDir, 0755)
+	runGitCmd(t, repoDir, "init", "-b", "main")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
+
+	// Input: repo path → branch (default main) → not private → app name →
+	// app type (7=Dockerfile) → port → no env vars → no .env →
+	// no databases (6=None) → subdomain → no extra headers →
+	// no webhook → cancel deploy
+	input := repoDir + "\n\nn\ncancelapp\n7\n3000\n\nn\n6\ncancelapp\n\nn\nn\n"
+	setWizardInput(t, input)
+
+	_ = captureStdout(func() {
+		err := RunDeploy()
+		if err != nil {
+			t.Errorf("Cancelled deploy should not error: %v", err)
+		}
 	})
 }

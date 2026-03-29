@@ -5,11 +5,21 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	// Clean up any containers left behind by tests
+	if docker.IsInstalled() {
+		_ = docker.Run([]string{"rm", "-f", "qd-caddy", "qd-traefik"})
+	}
+	os.Exit(code)
+}
 
 func checkPortAvailable(port int) error {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
@@ -309,6 +319,8 @@ func TestReloadCaddy_NoContainer(t *testing.T) {
 	if !docker.IsInstalled() {
 		t.Skip("Docker not installed")
 	}
+	// Ensure no stale qd-caddy container from previous tests
+	_ = docker.Run([]string{"rm", "-f", "qd-caddy"})
 	err := ReloadCaddy()
 	if err == nil {
 		t.Error("ReloadCaddy should fail without running container")
@@ -423,5 +435,140 @@ func TestRemoveCaddyApp_OnlyRemovesTarget(t *testing.T) {
 	}
 	if !strings.Contains(content, "app3.example.com") {
 		t.Error("app3 should remain")
+	}
+}
+
+// TestSetupCaddy_WritesFiles tests that SetupCaddy creates the expected files
+// (compose + Caddyfile) without needing port 80/443 (it'll fail at docker compose up).
+func TestSetupCaddy_WritesFiles(t *testing.T) {
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	dir := setupTestProxyDir(t)
+
+	// Clean up any stale containers from previous test runs
+	_ = docker.Run([]string{"rm", "-f", "qd-caddy"})
+
+	docker.CreateNetwork("simpledeploy")
+
+	err := SetupCaddy("setup-test@example.com")
+	// May fail at compose up if ports are in use, but files should still be written
+	_ = err
+
+	// Check compose file was created
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("docker-compose.yml should be written: %v", err)
+	}
+	if !strings.Contains(string(data), "caddy:2-alpine") {
+		t.Error("Compose should contain caddy image")
+	}
+
+	// Check Caddyfile was created
+	caddyPath := filepath.Join(dir, "Caddyfile")
+	caddyData, err := os.ReadFile(caddyPath)
+	if err != nil {
+		t.Fatalf("Caddyfile should be written: %v", err)
+	}
+	if !strings.Contains(string(caddyData), "setup-test@example.com") {
+		t.Error("Caddyfile should contain ACME email")
+	}
+
+	// Cleanup if it actually started
+	if docker.ContainerExists("qd-caddy") {
+		StopCaddy()
+	}
+}
+
+// TestSetupTraefik_WritesFiles tests that SetupTraefik creates the expected files.
+func TestSetupTraefik_WritesFiles(t *testing.T) {
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	dir := setupTestProxyDir(t)
+
+	// Clean up any stale containers from previous test runs
+	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+
+	docker.CreateNetwork("simpledeploy")
+
+	err := SetupTraefik("traefik-setup@example.com")
+	_ = err
+
+	// Check compose file
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("docker-compose.yml should be written: %v", err)
+	}
+	if !strings.Contains(string(data), "traefik:v3") {
+		t.Error("Compose should contain traefik image")
+	}
+	if !strings.Contains(string(data), "traefik-setup@example.com") {
+		t.Error("Compose should contain ACME email")
+	}
+
+	// Check .env file
+	envPath := filepath.Join(dir, ".env")
+	envData, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf(".env should be written: %v", err)
+	}
+	if !strings.Contains(string(envData), "ACME_EMAIL=traefik-setup@example.com") {
+		t.Error(".env should contain ACME email")
+	}
+
+	// Cleanup if it actually started
+	if docker.ContainerExists("qd-traefik") {
+		StopTraefik()
+	}
+}
+
+func TestSetupCaddy_ReadOnlyDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions not supported on Windows")
+	}
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	tmpDir := t.TempDir()
+	readOnlyDir := filepath.Join(tmpDir, "readonly")
+	os.MkdirAll(readOnlyDir, 0555)
+	os.Chmod(readOnlyDir, 0555)
+	defer os.Chmod(readOnlyDir, 0755)
+
+	ProxyDir = filepath.Join(readOnlyDir, "nested", "proxy")
+	defer func() { ProxyDir = "/opt/simpledeploy/proxy" }()
+
+	err := SetupCaddy("test@test.com")
+	if err == nil {
+		t.Error("Should fail with read-only proxy dir")
+	}
+}
+
+func TestSetupTraefik_ReadOnlyDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions not supported on Windows")
+	}
+	if !docker.IsInstalled() {
+		t.Skip("Docker not installed")
+	}
+
+	tmpDir := t.TempDir()
+	readOnlyDir := filepath.Join(tmpDir, "readonly")
+	os.MkdirAll(readOnlyDir, 0555)
+	os.Chmod(readOnlyDir, 0555)
+	defer os.Chmod(readOnlyDir, 0755)
+
+	ProxyDir = filepath.Join(readOnlyDir, "nested", "proxy")
+	defer func() { ProxyDir = "/opt/simpledeploy/proxy" }()
+
+	err := SetupTraefik("test@test.com")
+	if err == nil {
+		t.Error("Should fail with read-only proxy dir")
 	}
 }
