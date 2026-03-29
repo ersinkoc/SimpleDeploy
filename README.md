@@ -2,6 +2,12 @@
 
 **Single-Binary PaaS CLI — Deploy apps to your server in seconds.**
 
+<p align="center">
+  <img src="assets/simple_deploy.jpeg" alt="SimpleDeploy Logo" width="100%">
+</p>
+
+> **Note:** This project is currently in development and not yet ready for production use.
+
 SimpleDeploy is a zero-external-dependency PaaS tool written in Go. Provide a Git repo URL, and it handles the rest: Docker setup, image build, database provisioning, reverse proxy (Traefik or Caddy), SSL certificates, and auto-deploy via webhooks.
 
 ## Philosophy
