@@ -130,7 +130,8 @@ func RunDeploy() error {
 		wizard.Warn(fmt.Sprintf("Invalid port %q, defaulting to 3000", portStr))
 		app.Port = 3000
 	}
-	if app.Port == 0 {
+	if app.Port < 1 || app.Port > 65535 {
+		wizard.Warn(fmt.Sprintf("Port %d out of range (1-65535), defaulting to 3000", app.Port))
 		app.Port = 3000
 	}
 
