@@ -22,6 +22,9 @@ func PrintUsage() {
 	fmt.Println("  list                List deployed applications")
 	fmt.Println("  redeploy <app>      Redeploy an application")
 	fmt.Println("  remove <app>        Remove an application")
+	fmt.Println("  restart <app>       Restart an application")
+	fmt.Println("  stop <app>          Stop an application")
+	fmt.Println("  exec <app> <cmd>    Execute command in app container")
 	fmt.Println("  logs <app>          Show application logs")
 	fmt.Println("  status              Show SimpleDeploy status")
 	fmt.Println("  service <action>    Manage SimpleDeploy service (install|start|stop)")
@@ -55,6 +58,12 @@ func Route(args []string) error {
 		return RunRedeploy(cmdArgs)
 	case "remove", "rm":
 		return RunRemove(cmdArgs)
+	case "restart":
+		return RunRestart(cmdArgs)
+	case "stop":
+		return RunStop(cmdArgs)
+	case "exec":
+		return RunExec(cmdArgs)
 	case "logs":
 		return RunLogs(cmdArgs)
 	case "status":

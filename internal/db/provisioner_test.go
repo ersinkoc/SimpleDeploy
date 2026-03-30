@@ -187,11 +187,37 @@ func TestProvisionDatabases_AllTypes(t *testing.T) {
 		t.Errorf("Volumes count = %d, want 5", len(volumes))
 	}
 	// Should have at least DATABASE_URL and REDIS_URL and MONGODB_URI
-	expectedVars := []string{"DATABASE_URL", "REDIS_URL", "MONGODB_URI"}
+	expectedVars := []string{"DATABASE_URL", "REDIS_URL", "MONGODB_URI", "MYSQL_URL", "POSTGRESQL_URL", "MARIADB_URL"}
 	for _, key := range expectedVars {
 		if _, ok := envVars[key]; !ok {
 			t.Errorf("Missing env var %q", key)
 		}
+	}
+}
+
+func TestProvisionDatabases_MultipleSQL_FirstGetsDatabaseURL(t *testing.T) {
+	envVars, _, _, err := ProvisionDatabases("app", []string{"mysql", "postgresql", "mariadb"})
+	if err != nil {
+		t.Fatalf("ProvisionDatabases failed: %v", err)
+	}
+	// DATABASE_URL should be the mysql one (first SQL DB)
+	if !strings.Contains(envVars["DATABASE_URL"], "qd-app-mysql") {
+		t.Errorf("DATABASE_URL should contain mysql host, got %q", envVars["DATABASE_URL"])
+	}
+	// All three should have their own specific keys
+	for _, key := range []string{"MYSQL_URL", "POSTGRESQL_URL", "MARIADB_URL"} {
+		if _, ok := envVars[key]; !ok {
+			t.Errorf("Missing env var %q", key)
+		}
+	}
+	if !strings.Contains(envVars["MYSQL_URL"], "qd-app-mysql") {
+		t.Errorf("MYSQL_URL should point to mysql host, got %q", envVars["MYSQL_URL"])
+	}
+	if !strings.Contains(envVars["POSTGRESQL_URL"], "qd-app-postgresql") {
+		t.Errorf("POSTGRESQL_URL should point to postgresql host, got %q", envVars["POSTGRESQL_URL"])
+	}
+	if !strings.Contains(envVars["MARIADB_URL"], "qd-app-mariadb") {
+		t.Errorf("MARIADB_URL should point to mariadb host, got %q", envVars["MARIADB_URL"])
 	}
 }
 

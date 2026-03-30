@@ -43,6 +43,12 @@ type HealthCheckData struct {
 	Retries  int
 }
 
+// yamlEscape returns a YAML-safe double-quoted string.
+func yamlQuote(s string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`).Replace(s)
+	return `"` + escaped + `"`
+}
+
 func Generate(data *ComposeData) string {
 	var b strings.Builder
 
@@ -68,7 +74,7 @@ func Generate(data *ComposeData) string {
 	if len(data.Environment) > 0 {
 		b.WriteString("    environment:\n")
 		for key, val := range data.Environment {
-			b.WriteString(fmt.Sprintf("      - %s=%s\n", key, val))
+			b.WriteString(fmt.Sprintf("      - %s=%s\n", key, yamlQuote(val)))
 		}
 	}
 
@@ -119,7 +125,7 @@ func Generate(data *ComposeData) string {
 		if len(db.Env) > 0 {
 			b.WriteString("    environment:\n")
 			for key, val := range db.Env {
-				b.WriteString(fmt.Sprintf("      %s: %s\n", key, val))
+				b.WriteString(fmt.Sprintf("      %s: %s\n", key, yamlQuote(val)))
 			}
 		}
 

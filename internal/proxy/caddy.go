@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
@@ -46,7 +47,13 @@ func SetupCaddy(acmeEmail string) error {
 	return nil
 }
 
+var safeDomainRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,}$`)
+
 func AddCaddyApp(appName, domain string, port int, headers map[string]string) error {
+	if !safeDomainRe.MatchString(domain) {
+		return fmt.Errorf("invalid domain: %q", domain)
+	}
+
 	caddyfilePath := filepath.Join(ProxyDir, "Caddyfile")
 	data, err := os.ReadFile(caddyfilePath)
 	if err != nil {
@@ -76,11 +83,14 @@ func RemoveCaddyApp(domain string) error {
 	var result []string
 	skip := false
 	for _, line := range lines {
-		if strings.TrimSpace(line) == domain+" {" {
+		trimmed := strings.TrimSpace(line)
+		// Match domain block start: "domain {" with any whitespace
+		if !skip && (trimmed == domain+" {" || trimmed == domain+"{") {
 			skip = true
 			continue
 		}
-		if skip && strings.TrimSpace(line) == "}" {
+		// Match closing brace at column 0 (top-level block end)
+		if skip && trimmed == "}" {
 			skip = false
 			continue
 		}

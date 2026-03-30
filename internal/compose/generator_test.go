@@ -45,7 +45,7 @@ func TestGenerateBasic(t *testing.T) {
 	if !strings.Contains(yaml, "Host(`myapp.example.com`)") {
 		t.Error("Should contain domain rule")
 	}
-	if !strings.Contains(yaml, "KEY=value") {
+	if !strings.Contains(yaml, `KEY="value"`) {
 		t.Error("Should contain environment variable")
 	}
 	if !strings.Contains(yaml, "X-Custom=yes") {
@@ -101,7 +101,7 @@ func TestGenerateWithDatabases(t *testing.T) {
 	if !strings.Contains(yaml, "mysql:8") {
 		t.Error("Should contain mysql image")
 	}
-	if !strings.Contains(yaml, "MYSQL_ROOT_PASSWORD: secret") {
+	if !strings.Contains(yaml, `MYSQL_ROOT_PASSWORD: "secret"`) {
 		t.Error("Should contain mysql password")
 	}
 	if !strings.Contains(yaml, "healthcheck:") {
@@ -296,7 +296,7 @@ func TestGenerate_MultipleEnvVars(t *testing.T) {
 
 	yaml := Generate(data)
 	for k, v := range data.Environment {
-		expected := k + "=" + v
+		expected := k + "=\"" + v + "\""
 		if !strings.Contains(yaml, expected) {
 			t.Errorf("Should contain env var %s", expected)
 		}

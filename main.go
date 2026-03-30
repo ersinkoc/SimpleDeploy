@@ -5,9 +5,12 @@ import (
 	"os"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/cli"
+	"github.com/ersinkoc/SimpleDeploy/internal/config"
 )
 
 func main() {
+	config.Init()
+
 	if len(os.Args) < 2 {
 		cli.PrintUsage()
 		os.Exit(0)

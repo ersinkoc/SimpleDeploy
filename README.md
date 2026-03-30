@@ -22,7 +22,7 @@ SimpleDeploy is a zero-external-dependency PaaS tool written in Go. Provide a Gi
 - **Database provisioning** — MySQL 8, PostgreSQL 16, MariaDB 11, MongoDB 7, Redis 7.
 - **Reverse proxy** — Traefik (auto-discovery) or Caddy (auto-SSL).
 - **Let's Encrypt** — Automatic SSL certificate provisioning.
-- **Webhook auto-deploy** — Push to GitHub → instant redeploy with HMAC-SHA256 verification.
+- **Webhook auto-deploy** — Push to GitHub/GitLab/Gitea → instant redeploy with signature verification.
 - **Encrypted secrets** — AES-256-GCM encryption for tokens and passwords.
 - **Security headers** — Automatic security headers on every app.
 - **Service mode** — Run SimpleDeploy itself as a Docker container.
@@ -51,6 +51,9 @@ simpledeploy deploy              # Deploy a new application
 simpledeploy list                # List deployed applications
 simpledeploy redeploy <app>      # Redeploy an application
 simpledeploy remove <app>        # Remove an application
+simpledeploy restart <app>       # Restart an application
+simpledeploy stop <app>          # Stop an application
+simpledeploy exec <app> <cmd>    # Execute command in app container
 simpledeploy logs <app>          # Show application logs
 simpledeploy status              # Show SimpleDeploy status
 simpledeploy service install     # Install as Docker service
@@ -64,7 +67,7 @@ simpledeploy version             # Show version
 
 1. **`simpledeploy init`** — Checks Docker, sets up Traefik/Caddy, configures domain, SSL, and webhook secret.
 2. **`simpledeploy deploy`** — Clones your repo, detects the framework, builds a Docker image, generates docker-compose.yml, starts containers behind the reverse proxy.
-3. **Webhook** — Receives GitHub push events, verifies HMAC-SHA256, pulls latest code, rebuilds, and redeploys.
+3. **Webhook** — Receives GitHub/GitLab/Gitea push events, verifies signature, pulls latest code, rebuilds, and redeploys.
 
 ## Architecture
 
@@ -77,7 +80,7 @@ simpledeploy (single binary)
 │   ├── docker/      → Docker install, build, compose
 │   ├── compose/     → YAML generator
 │   ├── proxy/       → Traefik / Caddy setup
-│   ├── webhook/     → HTTP webhook server
+│   ├── webhook/     → HTTP webhook server (GitHub/GitLab/Gitea)
 │   ├── db/          → Database provisioning
 │   ├── state/       → JSON state management + AES crypto
 │   ├── buildpack/   → Auto-detect & generate Dockerfiles
@@ -88,9 +91,10 @@ simpledeploy (single binary)
 ## Runtime File Structure
 
 ```
+~/.simpledeploy/
+└── state.json               → All apps' state + global config
+
 /opt/simpledeploy/
-├── config.json              → Global config
-├── state.json               → All apps' state
 ├── proxy/
 │   └── docker-compose.yml   → Traefik/Caddy compose
 ├── apps/
@@ -139,7 +143,8 @@ docker build -t simpledeploy:latest .
 
 - Git tokens and DB passwords encrypted with AES-256-GCM
 - Machine-id-based encryption key
-- HMAC-SHA256 webhook verification
+- HMAC-SHA256 webhook verification (GitHub, Gitea)
+- Token-based webhook verification (GitLab)
 - Automatic security headers on every application
 - Docker socket access restricted to SimpleDeploy container
 

@@ -572,3 +572,28 @@ func TestSetupTraefik_ReadOnlyDir(t *testing.T) {
 		t.Error("Should fail with read-only proxy dir")
 	}
 }
+
+func TestAddCaddyApp_InvalidDomain(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
+
+	tests := []struct {
+		name   string
+		domain string
+	}{
+		{"braces", "evil{.example.com"},
+		{"semicolon", "evil;example.com"},
+		{"newline", "evil\n.example.com"},
+		{"empty", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AddCaddyApp("test", tc.domain, 3000, nil)
+			if err == nil {
+				t.Errorf("AddCaddyApp should reject domain %q", tc.domain)
+			}
+		})
+	}
+}

@@ -95,12 +95,6 @@ func writeAskpassScript(token string) (path string, cleanup func(), err error) {
 // sanitizeOutput removes any token-like strings from git output.
 func sanitizeOutput(output, repoURL string) string {
 	sanitized := output
-	// Remove common patterns that might leak credentials
-	for _, pattern := range []string{
-		"https://*", "http://*",
-	} {
-		_ = pattern
-	}
 	// Remove the repo URL if present (it might contain embedded creds)
 	sanitized = strings.ReplaceAll(sanitized, repoURL, "<redacted>")
 	return sanitized

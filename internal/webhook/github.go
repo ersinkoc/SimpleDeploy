@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -51,17 +52,13 @@ func ParseGitHubEvent(r *http.Request) (event string, branch string, err error) 
 }
 
 func extractRefFromPayload(body string) string {
-	key := `"ref":"`
-	idx := strings.Index(body, key)
-	if idx == -1 {
+	var payload struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		return ""
 	}
-	start := idx + len(key)
-	end := strings.Index(body[start:], `"`)
-	if end == -1 {
-		return ""
-	}
-	return body[start : start+end]
+	return payload.Ref
 }
 
 func VerifyGitLabToken(r *http.Request, token string) bool {

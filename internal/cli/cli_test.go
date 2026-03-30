@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
 func TestAppNameFromArgs(t *testing.T) {
@@ -147,5 +149,102 @@ func TestRoute_ListEmpty(t *testing.T) {
 	err := Route([]string{"list"})
 	if err != nil {
 		t.Errorf("list should work without init: %v", err)
+	}
+}
+
+func TestRoute_RestartWithoutArgs(t *testing.T) {
+	err := Route([]string{"restart"})
+	if err == nil {
+		t.Error("restart without app name should return error")
+	}
+	if !strings.Contains(err.Error(), "application name") && !strings.Contains(err.Error(), "app-name") {
+		t.Errorf("Error should mention application name required, got: %v", err)
+	}
+}
+
+func TestRoute_StopWithoutArgs(t *testing.T) {
+	err := Route([]string{"stop"})
+	if err == nil {
+		t.Error("stop without app name should return error")
+	}
+	if !strings.Contains(err.Error(), "application name") && !strings.Contains(err.Error(), "app-name") {
+		t.Errorf("Error should mention application name required, got: %v", err)
+	}
+}
+
+func TestRoute_ExecWithoutArgs(t *testing.T) {
+	err := Route([]string{"exec"})
+	if err == nil {
+		t.Error("exec without args should return error")
+	}
+}
+
+func TestRoute_ExecWithOnlyApp(t *testing.T) {
+	err := Route([]string{"exec", "myapp"})
+	if err == nil {
+		t.Error("exec with only app name should return error")
+	}
+	if !strings.Contains(err.Error(), "usage") {
+		t.Errorf("Error should mention usage, got: %v", err)
+	}
+}
+
+func TestRoute_RestartNonExistent(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	err := Route([]string{"restart", "nonexistent"})
+	if err == nil {
+		t.Error("restart of non-existent app should return error")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestRoute_StopNonExistent(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	err := Route([]string{"stop", "nonexistent"})
+	if err == nil {
+		t.Error("stop of non-existent app should return error")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestRoute_ExecNonExistent(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	err := Route([]string{"exec", "nonexistent", "ls"})
+	if err == nil {
+		t.Error("exec on non-existent app should return error")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestRoute_RestartInvalidName(t *testing.T) {
+	err := Route([]string{"restart", "../etc"})
+	if err == nil {
+		t.Error("Should reject path traversal in app name")
+	}
+}
+
+func TestRoute_StopInvalidName(t *testing.T) {
+	err := Route([]string{"stop", "../etc"})
+	if err == nil {
+		t.Error("Should reject path traversal in app name")
+	}
+}
+
+func TestRoute_ExecInvalidName(t *testing.T) {
+	err := Route([]string{"exec", "../etc", "ls"})
+	if err == nil {
+		t.Error("Should reject path traversal in app name")
 	}
 }

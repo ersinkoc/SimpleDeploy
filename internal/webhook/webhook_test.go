@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
 func TestVerifyGitHubSignature_Valid(t *testing.T) {
@@ -269,5 +271,86 @@ func TestWebhook_WrongMethod(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected 405 for GET, got %d", rec.Code)
+	}
+}
+
+func TestWebhook_GitLabValid(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	srv := NewServer(0, "my-token")
+	body := `{"ref":"refs/heads/main"}`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/gitlabapp", strings.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", "my-token")
+	req.Header.Set("X-Gitlab-Event", "Push Hook")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		// 404 because app doesn't exist, but auth passed
+		t.Errorf("Expected 404 (app not found, auth passed), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebhook_GitLabInvalid(t *testing.T) {
+	srv := NewServer(0, "correct-token")
+	body := `{"ref":"refs/heads/main"}`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/gitlabapp", strings.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", "wrong-token")
+	req.Header.Set("X-Gitlab-Event", "Push Hook")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for invalid GitLab token, got %d", rec.Code)
+	}
+}
+
+func TestWebhook_GiteaValid(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	srv := NewServer(0, "gitea-secret")
+	body := []byte(`{"ref":"refs/heads/main"}`)
+	mac := hmac.New(sha256.New, []byte("gitea-secret"))
+	mac.Write(body)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/giteaapp", strings.NewReader(string(body)))
+	req.Header.Set("X-Gitea-Signature", sig)
+	req.Header.Set("X-Gitea-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		// 404 because app doesn't exist, but auth passed
+		t.Errorf("Expected 404 (app not found, auth passed), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebhook_GiteaInvalid(t *testing.T) {
+	srv := NewServer(0, "gitea-secret")
+	body := `{"ref":"refs/heads/main"}`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/giteaapp", strings.NewReader(body))
+	req.Header.Set("X-Gitea-Signature", "sha256=invalidsignature")
+	req.Header.Set("X-Gitea-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for invalid Gitea signature, got %d", rec.Code)
+	}
+}
+
+func TestWebhook_NoProviderHeaders(t *testing.T) {
+	srv := NewServer(0, "secret")
+	body := `{"ref":"refs/heads/main"}`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	// No provider-specific headers at all
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for no provider headers, got %d", rec.Code)
 	}
 }

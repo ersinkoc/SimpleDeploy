@@ -146,7 +146,16 @@ func ProvisionDatabases(appName string, selectedDBs []string) (map[string]string
 			envVars["REDIS_URL"] = fmt.Sprintf("redis://qd-%s-redis:6379", appName)
 		} else {
 			connStr := fmt.Sprintf(cfg.ConnTemplate, password, appName, appName)
-			envVars[cfg.ConnEnvKey] = connStr
+			// Set per-type URL key (e.g., MYSQL_URL, POSTGRESQL_URL)
+			specificKey := strings.ToUpper(dbType) + "_URL"
+			if dbType == "mongodb" {
+				specificKey = "MONGODB_URI"
+			}
+			envVars[specificKey] = connStr
+			// Set DATABASE_URL for the first SQL-type database only
+			if _, exists := envVars["DATABASE_URL"]; !exists {
+				envVars["DATABASE_URL"] = connStr
+			}
 		}
 	}
 

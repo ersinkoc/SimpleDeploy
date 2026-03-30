@@ -104,8 +104,18 @@ func Save(s *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	// Write with restricted permissions (contains encrypted secrets)
-	return os.WriteFile(path, data, 0600)
+	// Write atomically: write to temp file first, then rename to prevent
+	// corruption on crash. Rename is atomic on most filesystems.
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("failed to write state: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		// Clean up temp file on rename failure
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename state file: %w", err)
+	}
+	return nil
 }
 
 func GetApp(name string) (*AppConfig, error) {

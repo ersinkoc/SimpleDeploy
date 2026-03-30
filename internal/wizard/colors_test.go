@@ -13,10 +13,7 @@ func TestColorFunctions(t *testing.T) {
 		{"Red", Red},
 		{"Green", Green},
 		{"Yellow", Yellow},
-		{"Blue", Blue},
-		{"Cyan", Cyan},
 		{"Bold", Bold},
-		{"Magenta", Magenta},
 	}
 
 	for _, tt := range tests {

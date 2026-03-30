@@ -94,7 +94,9 @@ func CleanupOldImages(appName string, keep int) error {
 		return nil
 	}
 	for i := keep; i < len(images); i++ {
-		_ = RemoveImage(images[i])
+		if err := RemoveImage(images[i]); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove old image %s: %v\n", images[i], err)
+		}
 	}
 	return nil
 }

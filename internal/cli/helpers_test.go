@@ -453,7 +453,7 @@ func TestComposeIntegration(t *testing.T) {
 	if !strings.Contains(yaml, "qd-integration") {
 		t.Error("Generated compose should contain container name")
 	}
-	if !strings.Contains(yaml, "GO_ENV=test") {
+	if !strings.Contains(yaml, "GO_ENV=\"test\"") {
 		t.Error("Generated compose should contain env vars")
 	}
 	if !strings.Contains(yaml, "traefik.enable=true") {

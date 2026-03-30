@@ -42,6 +42,8 @@ func RunRedeploy(args []string) error {
 		decrypted, err := state.Decrypt(gitToken)
 		if err == nil {
 			gitToken = decrypted
+		} else {
+			wizard.Warn("Failed to decrypt git token: " + err.Error())
 		}
 	}
 
@@ -88,7 +90,14 @@ func RunRedeploy(args []string) error {
 	}
 
 	// Cleanup old images (keep last 3)
-	go docker.CleanupOldImages(appName, 3)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
+			}
+		}()
+		docker.CleanupOldImages(appName, 3)
+	}()
 
 	// Update state
 	app.CurrentImage = imageTag

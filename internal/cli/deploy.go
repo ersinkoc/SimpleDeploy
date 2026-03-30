@@ -38,7 +38,9 @@ func RunDeploy() error {
 	if private {
 		app.GitToken = wizard.AskRequired("GitHub/GitLab Token")
 		encToken, err := state.Encrypt(app.GitToken)
-		if err == nil {
+		if err != nil {
+			wizard.Warn("Failed to encrypt token, storing as plaintext")
+		} else {
 			app.GitToken = encToken
 		}
 	}
@@ -71,6 +73,8 @@ func RunDeploy() error {
 		decrypted, err := state.Decrypt(gitToken)
 		if err == nil {
 			gitToken = decrypted
+		} else {
+			wizard.Warn("Failed to decrypt git token: " + err.Error())
 		}
 	}
 
@@ -121,7 +125,11 @@ func RunDeploy() error {
 	// 5. Port
 	fmt.Println()
 	portStr := wizard.Ask("Application port", strconv.Itoa(detected.Port))
-	app.Port, _ = strconv.Atoi(portStr)
+	app.Port, err = strconv.Atoi(portStr)
+	if err != nil {
+		wizard.Warn(fmt.Sprintf("Invalid port %q, defaulting to 3000", portStr))
+		app.Port = 3000
+	}
 	if app.Port == 0 {
 		app.Port = 3000
 	}
@@ -152,11 +160,26 @@ func RunDeploy() error {
 
 	// 7. Databases
 	fmt.Println()
-	dbOptions := []string{"MySQL 8", "PostgreSQL 16", "MariaDB 11", "MongoDB 7", "Redis 7", "None"}
+	availableDBs := db.AvailableDatabases()
+	dbOptions := make([]string, 0, len(availableDBs)+1)
+	for _, name := range availableDBs {
+		if cfg, ok := db.GetDatabaseConfig(name); ok {
+			imgParts := strings.SplitN(cfg.Image, ":", 2)
+			label := strings.ToUpper(string(name[0])) + name[1:]
+			if len(imgParts) == 2 {
+				label += " " + imgParts[1]
+			}
+			dbOptions = append(dbOptions, label)
+		}
+	}
+	dbOptions = append(dbOptions, "None")
 	dbChoices := wizard.MultiChoose("Database requirements:", dbOptions)
 
 	var selectedDBs []string
-	dbMap := map[int]string{1: "mysql", 2: "postgresql", 3: "mariadb", 4: "mongodb", 5: "redis"}
+	dbMap := make(map[int]string)
+	for i, name := range availableDBs {
+		dbMap[i+1] = name
+	}
 	for _, c := range dbChoices {
 		if dbType, ok := dbMap[c]; ok {
 			selectedDBs = append(selectedDBs, dbType)
@@ -174,7 +197,10 @@ func RunDeploy() error {
 	app.DBCredentials = dbCreds
 
 	for k, v := range app.DBCredentials {
-		if enc, err := state.Encrypt(v); err == nil {
+		enc, err := state.Encrypt(v)
+		if err != nil {
+			wizard.Warn(fmt.Sprintf("Failed to encrypt %s credentials, storing as plaintext", k))
+		} else {
 			app.DBCredentials[k] = enc
 		}
 	}
@@ -259,7 +285,9 @@ func RunDeploy() error {
 	if err := docker.ComposeUp(appDir); err != nil {
 		wizard.Warn("Failed to start containers. Rolling back...")
 		// Attempt rollback: remove compose and clean up
-		_ = docker.ComposeDown(appDir)
+		if downErr := docker.ComposeDown(appDir); downErr != nil {
+			wizard.Warn("Rollback cleanup also failed: " + downErr.Error())
+		}
 		return fmt.Errorf("failed to start containers: %w", err)
 	}
 	wizard.Success("Containers started")

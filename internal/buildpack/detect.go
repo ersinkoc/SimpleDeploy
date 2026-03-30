@@ -116,6 +116,8 @@ func GetDockerfileTemplate(appType string) string {
 		return dockerfilePHP
 	case TypePython:
 		return dockerfilePython
+	case TypeRuby:
+		return dockerfileRuby
 	case TypeStatic:
 		return dockerfileStatic
 	default:
@@ -145,7 +147,7 @@ EXPOSE 3000
 CMD ["node", "index.js"]
 `
 
-const dockerfileGo = `FROM golang:1.22-alpine AS builder
+const dockerfileGo = `FROM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY go.* ./
 RUN go mod download
@@ -176,4 +178,13 @@ CMD ["python", "app.py"]
 const dockerfileStatic = `FROM nginx:alpine
 COPY . /usr/share/nginx/html/
 EXPOSE 80
+`
+
+const dockerfileRuby = `FROM ruby:3.3-slim
+WORKDIR /app
+COPY Gemfile Gemfile.lock ./
+RUN bundle install --jobs 4 --deployment --without development test
+COPY . .
+EXPOSE 3000
+CMD ["bundle", "exec", "rackup", "--host", "0.0.0.0", "--port", "3000"]
 `

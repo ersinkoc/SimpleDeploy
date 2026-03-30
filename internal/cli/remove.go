@@ -76,7 +76,14 @@ func RunRemove(args []string) error {
 	}
 
 	// Cleanup images
-	go docker.CleanupOldImages(appName, 0)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
+			}
+		}()
+		docker.CleanupOldImages(appName, 0)
+	}()
 
 	wizard.Success(fmt.Sprintf("Application '%s' removed", appName))
 	return nil

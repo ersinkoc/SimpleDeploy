@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
@@ -19,15 +20,18 @@ func isValidAppName(name string) bool {
 }
 
 type Server struct {
-	Port   int
-	Secret string
-	deploy func(appName string) error
+	Port        int
+	Secret      string
+	deploy      func(appName string) error
+	deployMu    sync.Mutex
+	deployLocks map[string]bool
 }
 
 func NewServer(port int, secret string) *Server {
 	return &Server{
-		Port:   port,
-		Secret: secret,
+		Port:        port,
+		Secret:      secret,
+		deployLocks: make(map[string]bool),
 	}
 }
 
@@ -74,23 +78,45 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify signature
-	signature := r.Header.Get("X-Hub-Signature-256")
-	if s.Secret != "" && !VerifyGitHubSignature(body, signature, s.Secret) {
-		http.Error(w, "Invalid signature", http.StatusUnauthorized)
-		return
+	// Verify signature/token based on webhook provider
+	if s.Secret != "" {
+		verified := false
+
+		if sig := r.Header.Get("X-Hub-Signature-256"); sig != "" {
+			// GitHub or Gitea (both use HMAC-SHA256 with X-Hub-Signature-256)
+			verified = VerifyGitHubSignature(body, sig, s.Secret)
+		} else if r.Header.Get("X-Gitlab-Token") != "" {
+			// GitLab uses a shared token in header
+			verified = VerifyGitLabToken(r, s.Secret)
+		} else if sig := r.Header.Get("X-Gitea-Signature"); sig != "" {
+			// Gitea-specific header (same HMAC-SHA256 computation)
+			verified = VerifyGiteaSignature(body, sig, s.Secret)
+		}
+
+		if !verified {
+			http.Error(w, "Invalid signature", http.StatusUnauthorized)
+			return
+		}
 	}
 
-	// Parse event from header and branch from already-read body
+	// Parse event from provider-specific header
 	event := r.Header.Get("X-GitHub-Event")
+	if event == "" {
+		event = r.Header.Get("X-Gitlab-Event")
+	}
+	if event == "" {
+		event = r.Header.Get("X-Gitea-Event")
+	}
 	ref := extractRefFromPayload(string(body))
 	branch := ""
 	if strings.HasPrefix(ref, "refs/heads/") {
 		branch = strings.TrimPrefix(ref, "refs/heads/")
 	}
 
-	// Check event type
-	if event != "push" {
+	// Check event type (normalize various provider event strings)
+	lowerEvent := strings.ToLower(event)
+	lowerEvent = strings.ReplaceAll(lowerEvent, " hook", "")
+	if lowerEvent != "push" {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Event ignored (not push)")
 		return
@@ -109,13 +135,38 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger deploy
+	// Trigger deploy (serialized per app)
 	if s.deploy != nil {
 		go func() {
+			s.deployMu.Lock()
+			if s.deployLocks[appName] {
+				s.deployMu.Unlock()
+				log.Printf("Deploy already in progress for %s, skipping", appName)
+				return
+			}
+			s.deployLocks[appName] = true
+			s.deployMu.Unlock()
+
 			log.Printf("Webhook triggered deploy for %s", appName)
+
+			// Safety: release lock after 30 min even if deploy hangs
+			done := make(chan struct{})
+			timer := time.AfterFunc(30*time.Minute, func() {
+				s.deployMu.Lock()
+				delete(s.deployLocks, appName)
+				s.deployMu.Unlock()
+				log.Printf("Deploy for %s timed out after 30 minutes, releasing lock", appName)
+			})
+
 			if err := s.deploy(appName); err != nil {
 				log.Printf("Deploy failed for %s: %v", appName, err)
 			}
+			close(done)
+			timer.Stop()
+
+			s.deployMu.Lock()
+			delete(s.deployLocks, appName)
+			s.deployMu.Unlock()
 		}()
 	}
 
