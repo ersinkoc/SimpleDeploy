@@ -292,6 +292,15 @@ func RunDeploy() error {
 	}
 	wizard.Success("Containers started")
 
+	// Verify container is actually running
+	containerName := "qd-" + app.Name
+	time.Sleep(2 * time.Second)
+	containerStatus, _ := docker.ContainerStatus(containerName)
+	if containerStatus != "running" {
+		wizard.Warn(fmt.Sprintf("Container %s is %q (expected running). Check logs with 'simpledeploy logs %s'", containerName, containerStatus, app.Name))
+		app.Status = "error"
+	}
+
 	// Proxy-specific post-deploy
 	if cfg.Proxy == "caddy" {
 		if err := proxy.AddCaddyApp(app.Name, app.Domain, app.Port, app.Headers); err != nil {

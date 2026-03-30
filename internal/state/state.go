@@ -104,14 +104,26 @@ func Save(s *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	// Write atomically: write to temp file first, then rename to prevent
+	// Write atomically: write to temp file, fsync, then rename to prevent
 	// corruption on crash. Rename is atomic on most filesystems.
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+	tmpFile, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create temp state file: %w", err)
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("failed to write state: %w", err)
 	}
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync state file: %w", err)
+	}
+	tmpFile.Close()
+
 	if err := os.Rename(tmpPath, path); err != nil {
-		// Clean up temp file on rename failure
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to rename state file: %w", err)
 	}

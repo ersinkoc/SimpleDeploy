@@ -1,13 +1,17 @@
 package webhook
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
@@ -19,12 +23,63 @@ func isValidAppName(name string) bool {
 	return validAppNameRe.MatchString(name)
 }
 
+// rateLimiter provides a simple per-IP token bucket rate limiter.
+type rateLimiter struct {
+	mu       sync.Mutex
+	visitors map[string]*visitor
+	limit    int
+	window   time.Duration
+}
+
+type visitor struct {
+	count    int
+	lastSeen time.Time
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	rl := &rateLimiter{
+		visitors: make(map[string]*visitor),
+		limit:    limit,
+		window:   window,
+	}
+	// Cleanup stale entries every minute
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			rl.mu.Lock()
+			for ip, v := range rl.visitors {
+				if time.Since(v.lastSeen) > rl.window {
+					delete(rl.visitors, ip)
+				}
+			}
+			rl.mu.Unlock()
+		}
+	}()
+	return rl
+}
+
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	v, ok := rl.visitors[ip]
+	if !ok || time.Since(v.lastSeen) > rl.window {
+		rl.visitors[ip] = &visitor{count: 1, lastSeen: time.Now()}
+		return true
+	}
+	v.count++
+	v.lastSeen = time.Now()
+	return v.count <= rl.limit
+}
+
 type Server struct {
 	Port        int
 	Secret      string
 	deploy      func(appName string) error
 	deployMu    sync.Mutex
 	deployLocks map[string]bool
+	deployWg    sync.WaitGroup
+	limiter     *rateLimiter
 }
 
 func NewServer(port int, secret string) *Server {
@@ -32,6 +87,7 @@ func NewServer(port int, secret string) *Server {
 		Port:        port,
 		Secret:      secret,
 		deployLocks: make(map[string]bool),
+		limiter:     newRateLimiter(60, time.Minute), // 60 req/min per IP
 	}
 }
 
@@ -47,19 +103,47 @@ func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.Port)
 	log.Printf("Webhook server listening on %s", addr)
 
-	server := &http.Server{
+	srv := &http.Server{
 		Addr:         addr,
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
 
-	return server.ListenAndServe()
+	// Graceful shutdown on signal
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-stop
+		log.Println("Shutting down webhook server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}()
+
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		return err
+	}
+
+	// Wait for in-flight deploys to finish
+	log.Println("Waiting for in-flight deploys to complete...")
+	s.deployWg.Wait()
+	log.Println("All deploys completed. Server stopped.")
+
+	return nil
 }
 
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Rate limiting
+	ip := strings.SplitN(r.RemoteAddr, ":", 2)[0]
+	if !s.limiter.allow(ip) {
+		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
 	}
 
@@ -83,13 +167,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		verified := false
 
 		if sig := r.Header.Get("X-Hub-Signature-256"); sig != "" {
-			// GitHub or Gitea (both use HMAC-SHA256 with X-Hub-Signature-256)
 			verified = VerifyGitHubSignature(body, sig, s.Secret)
 		} else if r.Header.Get("X-Gitlab-Token") != "" {
-			// GitLab uses a shared token in header
 			verified = VerifyGitLabToken(r, s.Secret)
 		} else if sig := r.Header.Get("X-Gitea-Signature"); sig != "" {
-			// Gitea-specific header (same HMAC-SHA256 computation)
 			verified = VerifyGiteaSignature(body, sig, s.Secret)
 		}
 
@@ -147,10 +228,12 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			s.deployLocks[appName] = true
 			s.deployMu.Unlock()
 
+			s.deployWg.Add(1)
+			defer s.deployWg.Done()
+
 			log.Printf("Webhook triggered deploy for %s", appName)
 
 			// Safety: release lock after 30 min even if deploy hangs
-			done := make(chan struct{})
 			timer := time.AfterFunc(30*time.Minute, func() {
 				s.deployMu.Lock()
 				delete(s.deployLocks, appName)
@@ -161,7 +244,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			if err := s.deploy(appName); err != nil {
 				log.Printf("Deploy failed for %s: %v", appName, err)
 			}
-			close(done)
 			timer.Stop()
 
 			s.deployMu.Lock()
