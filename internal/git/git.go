@@ -53,7 +53,8 @@ func Pull(repoDir, branch string, token ...string) error {
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("git pull failed: %s: %w", string(output), err)
+		safeOutput := sanitizeOutput(string(output), "")
+		return fmt.Errorf("git pull failed: %s: %w", safeOutput, err)
 	}
 	return nil
 }
