@@ -268,6 +268,8 @@ func RunDeploy() error {
 	wizard.Info("Building Docker image...")
 	imageTag, err := docker.BuildImage(sourceDir, app.Name)
 	if err != nil {
+		// Clean up app directory on build failure (contains .env with credentials)
+		os.RemoveAll(appDir)
 		return fmt.Errorf("build failed: %w", err)
 	}
 	wizard.Success("Image built: " + imageTag)
@@ -313,9 +315,9 @@ func RunDeploy() error {
 	}
 
 	// Update state
-		if app.Status != "error" {
-			app.Status = "running"
-		}
+	if app.Status != "error" {
+		app.Status = "running"
+	}
 	app.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	app.DeployCount = 1
 
