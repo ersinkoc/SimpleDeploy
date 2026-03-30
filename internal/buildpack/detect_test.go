@@ -115,7 +115,7 @@ func TestDetect_DockerfileTakesPrecedence(t *testing.T) {
 }
 
 func TestGetDockerfileTemplate(t *testing.T) {
-	tests := []string{TypeNode, TypeGo, TypePHP, TypePython, TypeStatic}
+	tests := []string{TypeNode, TypeGo, TypePHP, TypePython, TypeRuby, TypeStatic}
 	for _, appType := range tests {
 		tmpl := GetDockerfileTemplate(appType)
 		if tmpl == "" {
@@ -133,7 +133,7 @@ func TestGetDockerfileTemplate_Unknown(t *testing.T) {
 
 func TestWriteDockerfile(t *testing.T) {
 	dir := t.TempDir()
-	for _, appType := range []string{TypeNode, TypeGo, TypePHP, TypePython, TypeStatic} {
+	for _, appType := range []string{TypeNode, TypeGo, TypePHP, TypePython, TypeRuby, TypeStatic} {
 		t.Run(appType, func(t *testing.T) {
 			subdir := filepath.Join(dir, appType)
 			os.MkdirAll(subdir, 0755)
@@ -184,7 +184,7 @@ func TestDetectNodePort_NuxtProject(t *testing.T) {
 
 func TestDetectNodePort_PortReference(t *testing.T) {
 	dir := createTempRepo(t, map[string]string{
-		"package.json": `{"scripts":{"start":"node server.js --port 8080"}}`,
+		"package.json": `{"port":8080}`,
 	})
 	port := detectNodePort(dir)
 	if port != 3000 {

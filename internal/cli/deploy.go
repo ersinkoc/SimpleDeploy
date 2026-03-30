@@ -13,9 +13,6 @@ import (
 	compose "github.com/ersinkoc/SimpleDeploy/internal/compose"
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/db"
-	"github.com/ersinkoc/SimpleDeploy/internal/docker"
-	"github.com/ersinkoc/SimpleDeploy/internal/git"
-	"github.com/ersinkoc/SimpleDeploy/internal/proxy"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -37,7 +34,7 @@ func RunDeploy() error {
 	private := wizard.Confirm("Private repository?", false)
 	if private {
 		app.GitToken = wizard.AskRequired("GitHub/GitLab Token")
-		encToken, err := state.Encrypt(app.GitToken)
+		encToken, err := stateEncrypt(app.GitToken)
 		if err != nil {
 			wizard.Warn("Failed to encrypt token, storing as plaintext")
 		} else {
@@ -63,14 +60,14 @@ func RunDeploy() error {
 	appDir := cfgpkg.AppDir(app.Name)
 	sourceDir := filepath.Join(appDir, "source")
 
-	if err := os.MkdirAll(appDir, 0755); err != nil {
+	if err := osMkdirAll(appDir, 0755); err != nil {
 		return fmt.Errorf("failed to create app directory: %w", err)
 	}
 
 	wizard.Info("Cloning repository...")
 	gitToken := app.GitToken
 	if private {
-		decrypted, err := state.Decrypt(gitToken)
+		decrypted, err := stateDecrypt(gitToken)
 		if err == nil {
 			gitToken = decrypted
 		} else {
@@ -78,7 +75,7 @@ func RunDeploy() error {
 		}
 	}
 
-	if err := git.Clone(app.Repo, app.Branch, sourceDir, gitToken); err != nil {
+	if err := gitClone(app.Repo, app.Branch, sourceDir, gitToken); err != nil {
 		return fmt.Errorf("git clone failed: %w", err)
 	}
 	wizard.Success("Repository cloned")
@@ -114,9 +111,9 @@ func RunDeploy() error {
 	}
 
 	if app.Type != buildpack.TypeDocker {
-		if _, err := os.Stat(filepath.Join(sourceDir, "Dockerfile")); err != nil {
+		if _, err := osStat(filepath.Join(sourceDir, "Dockerfile")); err != nil {
 			wizard.Info("Generating Dockerfile for " + app.Type)
-			if err := buildpack.WriteDockerfile(sourceDir, app.Type); err != nil {
+			if err := buildpackWriteDockerfile(sourceDir, app.Type); err != nil {
 				return fmt.Errorf("failed to generate Dockerfile: %w", err)
 			}
 		}
@@ -142,10 +139,10 @@ func RunDeploy() error {
 	if wizard.Confirm(".env file exists?", false) {
 		customPath := wizard.Ask(".env path", "")
 		if customPath != "" {
-			data, err := os.ReadFile(customPath)
+			data, err := osReadFile(customPath)
 			if err != nil {
 				wizard.Warn("Could not read .env file: " + err.Error())
-			} else if err := os.WriteFile(envPath, data, 0600); err != nil {
+			} else if err := osWriteFile(envPath, data, 0600); err != nil {
 				wizard.Warn("Failed to write .env: " + err.Error())
 			}
 		}
@@ -187,7 +184,7 @@ func RunDeploy() error {
 		}
 	}
 
-	dbEnvVars, dbVolumes, dbCreds, err := db.ProvisionDatabases(app.Name, selectedDBs)
+	dbEnvVars, dbVolumes, dbCreds, err := dbProvisionDatabases(app.Name, selectedDBs)
 	if err != nil {
 		return fmt.Errorf("database provisioning failed: %w", err)
 	}
@@ -198,7 +195,7 @@ func RunDeploy() error {
 	app.DBCredentials = dbCreds
 
 	for k, v := range app.DBCredentials {
-		enc, err := state.Encrypt(v)
+		enc, err := stateEncrypt(v)
 		if err != nil {
 			wizard.Warn(fmt.Sprintf("Failed to encrypt %s credentials, storing as plaintext", k))
 		} else {
@@ -260,16 +257,16 @@ func RunDeploy() error {
 	for k, v := range envMap {
 		envLines = append(envLines, fmt.Sprintf("%s=%s", k, v))
 	}
-	if err := os.WriteFile(envPath, []byte(strings.Join(envLines, "\n")), 0600); err != nil {
+	if err := osWriteFile(envPath, []byte(strings.Join(envLines, "\n")), 0600); err != nil {
 		return fmt.Errorf("failed to write .env: %w", err)
 	}
 
 	// Build image
 	wizard.Info("Building Docker image...")
-	imageTag, err := docker.BuildImage(sourceDir, app.Name)
+	imageTag, err := dockerBuildImage(sourceDir, app.Name)
 	if err != nil {
 		// Clean up app directory on build failure (contains .env with credentials)
-		os.RemoveAll(appDir)
+		osRemoveAll(appDir)
 		return fmt.Errorf("build failed: %w", err)
 	}
 	wizard.Success("Image built: " + imageTag)
@@ -278,17 +275,17 @@ func RunDeploy() error {
 	// Generate compose
 	composeData := buildComposeData(app, cfg, dbVolumes, envMap)
 	composeContent := compose.Generate(composeData)
-	if err := compose.WriteCompose(appDir, composeContent); err != nil {
+	if err := composeWriteCompose(appDir, composeContent); err != nil {
 		return fmt.Errorf("failed to write compose: %w", err)
 	}
 	wizard.Success("Compose YAML generated")
 
 	// Start containers
 	wizard.Info("Starting containers...")
-	if err := docker.ComposeUp(appDir); err != nil {
+	if err := dockerComposeUp(appDir); err != nil {
 		wizard.Warn("Failed to start containers. Rolling back...")
 		// Attempt rollback: remove compose and clean up
-		if downErr := docker.ComposeDown(appDir); downErr != nil {
+		if downErr := dockerComposeDown(appDir); downErr != nil {
 			wizard.Warn("Rollback cleanup also failed: " + downErr.Error())
 		}
 		return fmt.Errorf("failed to start containers: %w", err)
@@ -298,7 +295,7 @@ func RunDeploy() error {
 	// Verify container is actually running
 	containerName := "qd-" + app.Name
 	time.Sleep(2 * time.Second)
-	containerStatus, _ := docker.ContainerStatus(containerName)
+	containerStatus, _ := dockerContainerStatus(containerName)
 	if containerStatus != "running" {
 		wizard.Warn(fmt.Sprintf("Container %s is %q (expected running). Check logs with 'simpledeploy logs %s'", containerName, containerStatus, app.Name))
 		app.Status = "error"
@@ -306,10 +303,10 @@ func RunDeploy() error {
 
 	// Proxy-specific post-deploy
 	if cfg.Proxy == "caddy" {
-		if err := proxy.AddCaddyApp(app.Name, app.Domain, app.Port, app.Headers); err != nil {
+		if err := proxyAddCaddyApp(app.Name, app.Domain, app.Port, app.Headers); err != nil {
 			wizard.Warn("Failed to update Caddyfile: " + err.Error())
 		}
-		if err := proxy.ReloadCaddy(); err != nil {
+		if err := proxyReloadCaddy(); err != nil {
 			wizard.Warn("Failed to reload Caddy: " + err.Error())
 		}
 	}
@@ -321,7 +318,7 @@ func RunDeploy() error {
 	app.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	app.DeployCount = 1
 
-	if err := state.SaveApp(app); err != nil {
+	if err := stateSaveApp(app); err != nil {
 		return fmt.Errorf("failed to save app state: %w", err)
 	}
 
@@ -376,7 +373,7 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 			switch envKey {
 			case "MYSQL_ROOT_PASSWORD", "MARIADB_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MONGO_INITDB_ROOT_PASSWORD":
 				if cred, ok := app.DBCredentials[dbType]; ok {
-					decrypted, err := state.Decrypt(cred)
+					decrypted, err := stateDecrypt(cred)
 					if err == nil {
 						dbSvc.Env[envKey] = decrypted
 					}
@@ -428,7 +425,7 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 func logDeploy(appDir, appName, imageTag string) {
 	logLine := fmt.Sprintf("[%s] Deployed %s with image %s\n",
 		time.Now().UTC().Format(time.RFC3339), appName, imageTag)
-	f, err := os.OpenFile(filepath.Join(appDir, "deploy.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := osOpenFileFunc(filepath.Join(appDir, "deploy.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}

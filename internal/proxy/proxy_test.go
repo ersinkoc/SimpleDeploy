@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +12,15 @@ import (
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 )
+
+type mockCommandRunner struct {
+	runErr error
+}
+
+func (m *mockCommandRunner) SetDir(string)         {}
+func (m *mockCommandRunner) SetStdout(io.Writer)   {}
+func (m *mockCommandRunner) SetStderr(io.Writer)   {}
+func (m *mockCommandRunner) Run() error            { return m.runErr }
 
 func TestMain(m *testing.M) {
 	code := m.Run()
@@ -570,6 +580,183 @@ func TestSetupTraefik_ReadOnlyDir(t *testing.T) {
 	err := SetupTraefik("test@test.com")
 	if err == nil {
 		t.Error("Should fail with read-only proxy dir")
+	}
+}
+
+func TestGetProxyDir_Fallback(t *testing.T) {
+	old := ProxyDir
+	ProxyDir = ""
+	defer func() { ProxyDir = old }()
+
+	dir := getProxyDir()
+	if dir == "" {
+		t.Error("getProxyDir fallback should not be empty")
+	}
+}
+
+func TestSetupCaddy_MkdirAllError(t *testing.T) {
+	old := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return os.ErrPermission
+	}
+	defer func() { osMkdirAll = old }()
+
+	err := SetupCaddy("test@test.com")
+	if err == nil {
+		t.Error("SetupCaddy should fail when MkdirAll fails")
+	}
+}
+
+func TestSetupCaddy_WriteComposeError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := osWriteFile
+	callCount := 0
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		callCount++
+		if callCount == 1 {
+			return os.ErrPermission
+		}
+		return os.WriteFile(name, data, perm)
+	}
+	defer func() { osWriteFile = old }()
+
+	err := SetupCaddy("test@test.com")
+	if err == nil {
+		t.Error("SetupCaddy should fail when WriteFile for compose fails")
+	}
+}
+
+func TestSetupCaddy_WriteCaddyfileError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := osWriteFile
+	callCount := 0
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		callCount++
+		if callCount == 2 {
+			return os.ErrPermission
+		}
+		return os.WriteFile(name, data, perm)
+	}
+	defer func() { osWriteFile = old }()
+
+	err := SetupCaddy("test@test.com")
+	if err == nil {
+		t.Error("SetupCaddy should fail when WriteFile for Caddyfile fails")
+	}
+}
+
+func TestSetupCaddy_CreateNetworkError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := dockerCreateNetwork
+	dockerCreateNetwork = func(name string) error {
+		return fmt.Errorf("network error")
+	}
+	defer func() { dockerCreateNetwork = old }()
+
+	err := SetupCaddy("test@test.com")
+	if err == nil {
+		t.Error("SetupCaddy should fail when CreateNetwork fails")
+	}
+}
+
+func TestSetupTraefik_MkdirAllError(t *testing.T) {
+	old := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return os.ErrPermission
+	}
+	defer func() { osMkdirAll = old }()
+
+	err := SetupTraefik("test@test.com")
+	if err == nil {
+		t.Error("SetupTraefik should fail when MkdirAll fails")
+	}
+}
+
+func TestSetupTraefik_WriteComposeError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := osWriteFile
+	callCount := 0
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		callCount++
+		if callCount == 1 {
+			return os.ErrPermission
+		}
+		return os.WriteFile(name, data, perm)
+	}
+	defer func() { osWriteFile = old }()
+
+	err := SetupTraefik("test@test.com")
+	if err == nil {
+		t.Error("SetupTraefik should fail when WriteFile for compose fails")
+	}
+}
+
+func TestSetupTraefik_WriteEnvError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := osWriteFile
+	callCount := 0
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		callCount++
+		if callCount == 2 {
+			return os.ErrPermission
+		}
+		return os.WriteFile(name, data, perm)
+	}
+	defer func() { osWriteFile = old }()
+
+	err := SetupTraefik("test@test.com")
+	if err == nil {
+		t.Error("SetupTraefik should fail when WriteFile for .env fails")
+	}
+}
+
+func TestSetupTraefik_CreateNetworkError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := dockerCreateNetwork
+	dockerCreateNetwork = func(name string) error {
+		return fmt.Errorf("network error")
+	}
+	defer func() { dockerCreateNetwork = old }()
+
+	err := SetupTraefik("test@test.com")
+	if err == nil {
+		t.Error("SetupTraefik should fail when CreateNetwork fails")
+	}
+}
+
+func TestSetupCaddy_DockerComposeUpError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := execCommand
+	execCommand = func(name string, arg ...string) commandRunner {
+		return &mockCommandRunner{runErr: fmt.Errorf("compose up failed")}
+	}
+	defer func() { execCommand = old }()
+
+	err := SetupCaddy("test@test.com")
+	if err == nil {
+		t.Error("SetupCaddy should fail when docker compose up fails")
+	}
+}
+
+func TestSetupTraefik_DockerComposeUpError(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := execCommand
+	execCommand = func(name string, arg ...string) commandRunner {
+		return &mockCommandRunner{runErr: fmt.Errorf("compose up failed")}
+	}
+	defer func() { execCommand = old }()
+
+	err := SetupTraefik("test@test.com")
+	if err == nil {
+		t.Error("SetupTraefik should fail when docker compose up fails")
 	}
 }
 

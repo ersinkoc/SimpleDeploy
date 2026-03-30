@@ -72,9 +72,6 @@ func Choose(prompt string, options []string, defaultIdx int) int {
 			defStr = strconv.Itoa(defaultIdx)
 		}
 		input := Ask(prompt, defStr)
-		if input == "" && defaultIdx > 0 {
-			return defaultIdx
-		}
 		idx, err := strconv.Atoi(input)
 		if err == nil && idx >= 1 && idx <= len(options) {
 			return idx

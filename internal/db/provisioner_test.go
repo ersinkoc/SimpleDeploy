@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -107,6 +108,19 @@ func TestProvisionDatabases_Unsupported(t *testing.T) {
 	_, _, _, err := ProvisionDatabases("app", []string{"couchdb"})
 	if err == nil {
 		t.Error("Should fail for unsupported DB type")
+	}
+}
+
+func TestProvisionDatabases_GeneratePasswordError(t *testing.T) {
+	old := generatePassword
+	generatePassword = func(length int) (string, error) {
+		return "", fmt.Errorf("password error")
+	}
+	defer func() { generatePassword = old }()
+
+	_, _, _, err := ProvisionDatabases("app", []string{"mysql"})
+	if err == nil {
+		t.Error("Should fail when GeneratePassword fails")
 	}
 }
 

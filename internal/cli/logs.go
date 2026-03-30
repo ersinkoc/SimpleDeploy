@@ -4,8 +4,6 @@ import (
 	"fmt"
 
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
-	"github.com/ersinkoc/SimpleDeploy/internal/docker"
-	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
 func RunLogs(args []string) error {
@@ -14,13 +12,13 @@ func RunLogs(args []string) error {
 		return err
 	}
 
-	if _, err := state.GetApp(appName); err != nil {
+	if _, err := stateGetApp(appName); err != nil {
 		return err
 	}
 
 	appDir := cfgpkg.AppDir(appName)
 
-	if err := docker.ComposeLogs(appDir, appName, true); err != nil {
+	if err := dockerComposeLogs(appDir, appName, true); err != nil {
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
 

@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
-
-const buildTimeout = 30 * time.Minute
 
 func BuildImage(contextDir, appName string) (string, error) {
 	timestamp := time.Now().Format("20060102-150405")
@@ -18,9 +15,9 @@ func BuildImage(contextDir, appName string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", tag, contextDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := newDockerCmdContext(ctx, "docker", "build", "-t", tag, contextDir)
+	cmd.SetStdout(os.Stdout)
+	cmd.SetStderr(os.Stderr)
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("docker build timed out after %v", buildTimeout)
@@ -38,9 +35,9 @@ func BuildImageWithDockerfile(contextDir, dockerfilePath, appName string) (strin
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "build", "-f", dockerfilePath, "-t", tag, contextDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := newDockerCmdContext(ctx, "docker", "build", "-f", dockerfilePath, "-t", tag, contextDir)
+	cmd.SetStdout(os.Stdout)
+	cmd.SetStderr(os.Stderr)
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("docker build timed out after %v", buildTimeout)
@@ -52,23 +49,23 @@ func BuildImageWithDockerfile(contextDir, dockerfilePath, appName string) (strin
 }
 
 func TagImage(source, target string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), tagTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "tag", source, target)
+	cmd := newDockerCmdContext(ctx, "docker", "tag", source, target)
 	return cmd.Run()
 }
 
 func RemoveImage(tag string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), tagTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "rmi", "-f", tag)
+	cmd := newDockerCmdContext(ctx, "docker", "rmi", "-f", tag)
 	return cmd.Run()
 }
 
 func ListImages(appName string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}", appName)
+	cmd := newDockerCmdContext(ctx, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}", appName)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -102,10 +99,10 @@ func CleanupOldImages(appName string, keep int) error {
 }
 
 func PullImage(image string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "pull", image)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := newDockerCmdContext(ctx, "docker", "pull", image)
+	cmd.SetStdout(os.Stdout)
+	cmd.SetStderr(os.Stderr)
 	return cmd.Run()
 }

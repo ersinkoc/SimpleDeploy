@@ -1448,6 +1448,12 @@ func TestRunInit_WithDocker(t *testing.T) {
 	}
 	ln443.Close()
 
+	// Clean up stale containers from previous test runs
+	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	t.Cleanup(func() {
+		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	})
+
 	// Create network (needed by proxy setup)
 	docker.CreateNetwork("simpledeploy")
 
@@ -1480,6 +1486,7 @@ func TestRunInit_WithDocker(t *testing.T) {
 	captureStdout(func() {
 		proxy.StopTraefik()
 	})
+	time.Sleep(2 * time.Second)
 }
 
 func TestRunInit_CaddyChoice(t *testing.T) {
@@ -1510,6 +1517,9 @@ func TestRunInit_CaddyChoice(t *testing.T) {
 
 	// Clean up stale containers from previous test runs
 	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	t.Cleanup(func() {
+		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	})
 
 	docker.CreateNetwork("simpledeploy")
 
@@ -1602,6 +1612,9 @@ func TestRunInit_AlreadyInitReconfigure(t *testing.T) {
 
 	// Clean up stale containers from previous test runs
 	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	t.Cleanup(func() {
+		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	})
 
 	docker.CreateNetwork("simpledeploy")
 
@@ -1663,6 +1676,9 @@ func TestRunInit_InvalidPort(t *testing.T) {
 
 	// Clean up stale containers from previous test runs
 	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	t.Cleanup(func() {
+		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
+	})
 
 	docker.CreateNetwork("simpledeploy")
 

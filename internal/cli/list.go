@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
 func RunList() error {
-	s, err := state.Load()
+	s, err := stateLoad()
 	if err != nil {
 		return err
 	}

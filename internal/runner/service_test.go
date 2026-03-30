@@ -14,6 +14,17 @@ func setupTestServiceDir(t *testing.T) string {
 	return dir
 }
 
+func TestGetServiceDir_Fallback(t *testing.T) {
+	old := ServiceDir
+	ServiceDir = ""
+	defer func() { ServiceDir = old }()
+
+	dir := getServiceDir()
+	if dir == "" {
+		t.Error("getServiceDir fallback should not be empty")
+	}
+}
+
 func TestGenerateServiceCompose(t *testing.T) {
 	content := generateServiceCompose("deploy.example.com", 9000)
 	if !strings.Contains(content, "simpledeploy:latest") {
@@ -81,6 +92,41 @@ func TestInstallService_CreatesDir(t *testing.T) {
 
 	if _, err := os.Stat(nestedDir); os.IsNotExist(err) {
 		t.Error("Should create nested directory")
+	}
+}
+
+func TestInstallService_MkdirAllError(t *testing.T) {
+	dir := setupTestServiceDir(t)
+
+	oldMkdirAll := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return os.ErrPermission
+	}
+	defer func() { osMkdirAll = oldMkdirAll }()
+
+	err := InstallService("test.example.com", 9000)
+	if err == nil {
+		t.Error("Should fail when MkdirAll fails")
+	}
+	// Ensure no partial file was written
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	if _, err := os.Stat(composePath); err == nil {
+		t.Error("Should not write compose file when MkdirAll fails")
+	}
+}
+
+func TestInstallService_WriteFileError(t *testing.T) {
+	setupTestServiceDir(t)
+
+	oldWriteFile := osWriteFile
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		return os.ErrPermission
+	}
+	defer func() { osWriteFile = oldWriteFile }()
+
+	err := InstallService("test.example.com", 9000)
+	if err == nil {
+		t.Error("Should fail when WriteFile fails")
 	}
 }
 

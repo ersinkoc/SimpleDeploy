@@ -311,3 +311,86 @@ func TestAskMultiple_Empty(t *testing.T) {
 		t.Errorf("AskMultiple() with immediate empty = %v, want empty", result)
 	}
 }
+
+func TestChoose_EmptyNoDefault(t *testing.T) {
+	restore := quiet(t)
+	defer restore()
+
+	scanner = bufio.NewScanner(strings.NewReader("\n1\n"))
+	defer func() { scanner = bufio.NewScanner(os.Stdin) }()
+
+	options := []string{"A", "B"}
+	result := Choose("Pick:", options, 0)
+	if result != 1 {
+		t.Errorf("Choose() = %d, want 1", result)
+	}
+}
+
+func TestSetScannerForTesting(t *testing.T) {
+	oldScanner := scanner
+	defer func() { scanner = oldScanner }()
+
+	newScanner := bufio.NewScanner(strings.NewReader("test\n"))
+	SetScannerForTesting(newScanner)
+
+	restore := quiet(t)
+	defer restore()
+
+	result := Ask("Name", "")
+	if result != "test" {
+		t.Errorf("SetScannerForTesting() did not replace scanner correctly, got %q", result)
+	}
+}
+
+func TestAsk_ScannerEOF(t *testing.T) {
+	restore := quiet(t)
+	defer restore()
+
+	scanner = bufio.NewScanner(strings.NewReader(""))
+	defer func() { scanner = bufio.NewScanner(os.Stdin) }()
+
+	result := Ask("Name", "fallback")
+	if result != "fallback" {
+		t.Errorf("Ask() with EOF = %q, want 'fallback'", result)
+	}
+}
+
+func TestConfirm_ScannerEOF(t *testing.T) {
+	restore := quiet(t)
+	defer restore()
+
+	scanner = bufio.NewScanner(strings.NewReader(""))
+	defer func() { scanner = bufio.NewScanner(os.Stdin) }()
+
+	result := Confirm("Continue?", false)
+	if result != false {
+		t.Errorf("Confirm() with EOF = %v, want false", result)
+	}
+}
+
+func TestChoose_InvalidThenValid(t *testing.T) {
+	restore := quiet(t)
+	defer restore()
+
+	scanner = bufio.NewScanner(strings.NewReader("99\n0\n2\n"))
+	defer func() { scanner = bufio.NewScanner(os.Stdin) }()
+
+	options := []string{"A", "B"}
+	result := Choose("Pick:", options, 0)
+	if result != 2 {
+		t.Errorf("Choose() = %d, want 2", result)
+	}
+}
+
+func TestAskMultiple_ScannerEOF(t *testing.T) {
+	restore := quiet(t)
+	defer restore()
+
+	scanner = bufio.NewScanner(strings.NewReader("item1"))
+	defer func() { scanner = bufio.NewScanner(os.Stdin) }()
+
+	result := AskMultiple("Items")
+	if len(result) != 1 || result[0] != "item1" {
+		t.Errorf("AskMultiple() with EOF = %v, want ['item1']", result)
+	}
+}

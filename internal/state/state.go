@@ -9,6 +9,22 @@ import (
 	"time"
 )
 
+type stateFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+var (
+	osUserHomeDir    = os.UserHomeDir
+	osMkdirAll       = os.MkdirAll
+	osOpenFile       = func(name string, flag int, perm os.FileMode) (stateFile, error) { return os.OpenFile(name, flag, perm) }
+	osRename         = os.Rename
+	osRemove         = os.Remove
+	osReadFile       = os.ReadFile
+	jsonMarshalIndent = json.MarshalIndent
+)
+
 type AppConfig struct {
 	Name           string            `json:"name"`
 	Repo           string            `json:"repo"`
@@ -49,7 +65,7 @@ var (
 
 func InitState(baseDir string) {
 	if baseDir == "" {
-		home, _ := os.UserHomeDir()
+		home, _ := osUserHomeDir()
 		baseDir = filepath.Join(home, ".simpledeploy")
 	}
 	statePath = filepath.Join(baseDir, "state.json")
@@ -59,7 +75,7 @@ func getStatePath() string {
 	if statePath != "" {
 		return statePath
 	}
-	home, _ := os.UserHomeDir()
+	home, _ := osUserHomeDir()
 	return filepath.Join(home, ".simpledeploy", "state.json")
 }
 
@@ -68,7 +84,7 @@ func Load() (*State, error) {
 	defer mu.Unlock()
 
 	path := getStatePath()
-	data, err := os.ReadFile(path)
+	data, err := osReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &State{
@@ -95,11 +111,11 @@ func Save(s *State) error {
 
 	path := getStatePath()
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := osMkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create state directory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := jsonMarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
@@ -107,24 +123,24 @@ func Save(s *State) error {
 	// Write atomically: write to temp file, fsync, then rename to prevent
 	// corruption on crash. Rename is atomic on most filesystems.
 	tmpPath := path + ".tmp"
-	tmpFile, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	tmpFile, err := osOpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create temp state file: %w", err)
 	}
 	if _, err := tmpFile.Write(data); err != nil {
 		tmpFile.Close()
-		os.Remove(tmpPath)
+		osRemove(tmpPath)
 		return fmt.Errorf("failed to write state: %w", err)
 	}
 	if err := tmpFile.Sync(); err != nil {
 		tmpFile.Close()
-		os.Remove(tmpPath)
+		osRemove(tmpPath)
 		return fmt.Errorf("failed to sync state file: %w", err)
 	}
 	tmpFile.Close()
 
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+	if err := osRename(tmpPath, path); err != nil {
+		osRemove(tmpPath)
 		return fmt.Errorf("failed to rename state file: %w", err)
 	}
 	return nil

@@ -26,9 +26,11 @@ func AppDir(name string) string { return filepath.Join(BaseDir, "apps", name) }
 func ServiceDir() string        { return filepath.Join(BaseDir, "service") }
 func ConfigPath() string        { return filepath.Join(BaseDir, "config.json") }
 
+var osUserHomeDir = os.UserHomeDir
+
 // HomeDataDir returns ~/.simpledeploy for local state.
 func HomeDataDir() string {
-	home, err := os.UserHomeDir()
+	home, err := osUserHomeDir()
 	if err != nil {
 		home = "/root"
 	}

@@ -1,21 +1,30 @@
 package docker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
+var (
+	execLookPath  = exec.LookPath
+	wizardConfirm = wizard.Confirm
+)
+
 func IsInstalled() bool {
-	_, err := exec.LookPath("docker")
+	_, err := execLookPath("docker")
 	return err == nil
 }
 
 func GetVersion() (string, error) {
-	cmd := exec.Command("docker", "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := newDockerCmdContext(ctx, "docker", "--version")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -24,15 +33,15 @@ func GetVersion() (string, error) {
 }
 
 func IsComposeInstalled() bool {
-	cmd := exec.Command("docker", "compose", "version")
+	cmd := newDockerCmd("docker", "compose", "version")
 	return cmd.Run() == nil
 }
 
 func Install() error {
 	wizard.Info("Installing Docker Engine...")
-	cmd := exec.Command("sh", "-c", "curl -fsSL https://get.docker.com | sh")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := newDockerCmd("sh", "-c", "curl -fsSL https://get.docker.com | sh")
+	cmd.SetStdout(os.Stdout)
+	cmd.SetStderr(os.Stderr)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Docker installation failed: %w", err)
 	}
@@ -47,7 +56,7 @@ func EnsureDocker() error {
 		return nil
 	}
 
-	if !wizard.Confirm("Docker not found. Install it?", true) {
+	if !wizardConfirm("Docker not found. Install it?", true) {
 		return fmt.Errorf("Docker is required to continue")
 	}
 
@@ -64,7 +73,7 @@ func EnsureDocker() error {
 }
 
 func NetworkExists(name string) bool {
-	cmd := exec.Command("docker", "network", "inspect", name)
+	cmd := newDockerCmd("docker", "network", "inspect", name)
 	return cmd.Run() == nil
 }
 
@@ -72,7 +81,9 @@ func CreateNetwork(name string) error {
 	if NetworkExists(name) {
 		return nil
 	}
-	cmd := exec.Command("docker", "network", "create", name)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := newDockerCmdContext(ctx, "docker", "network", "create", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create network %s: %s: %w", name, string(output), err)

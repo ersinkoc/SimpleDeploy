@@ -20,16 +20,21 @@ func getServiceDir() string {
 	return config.ServiceDir()
 }
 
+var (
+	osMkdirAll  = os.MkdirAll
+	osWriteFile = os.WriteFile
+)
+
 func InstallService(baseDomain string, webhookPort int) error {
 	wizard.Info("Installing SimpleDeploy as a service...")
 
-	if err := os.MkdirAll(getServiceDir(), 0755); err != nil {
+	if err := osMkdirAll(getServiceDir(), 0755); err != nil {
 		return fmt.Errorf("failed to create service directory: %w", err)
 	}
 
 	composeContent := generateServiceCompose(baseDomain, webhookPort)
 	composePath := filepath.Join(getServiceDir(), "docker-compose.yml")
-	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
+	if err := osWriteFile(composePath, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write service compose: %w", err)
 	}
 

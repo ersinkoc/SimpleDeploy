@@ -223,6 +223,202 @@ func TestServer_StartAndHealthCheck(t *testing.T) {
 	}
 }
 
+func TestRateLimiter_Allow(t *testing.T) {
+	rl := newRateLimiter(2, time.Minute)
+	ip := "127.0.0.1"
+
+	if !rl.allow(ip) {
+		t.Error("First request should be allowed")
+	}
+	if !rl.allow(ip) {
+		t.Error("Second request should be allowed")
+	}
+	if rl.allow(ip) {
+		t.Error("Third request should be rate limited")
+	}
+}
+
+func TestRateLimiter_Cleanup(t *testing.T) {
+	oldInterval := cleanupInterval
+	cleanupInterval = 50 * time.Millisecond
+	defer func() { cleanupInterval = oldInterval }()
+
+	rl := newRateLimiter(2, 100*time.Millisecond)
+	ip := "127.0.0.1"
+	rl.allow(ip)
+
+	time.Sleep(250 * time.Millisecond)
+
+	rl.mu.Lock()
+	_, exists := rl.visitors[ip]
+	rl.mu.Unlock()
+
+	if exists {
+		t.Error("Stale visitor should be cleaned up")
+	}
+}
+
+func TestServer_ListenAndServeError(t *testing.T) {
+	old := httpListenAndServe
+	httpListenAndServe = func(srv *http.Server) error {
+		return fmt.Errorf("bind error")
+	}
+	defer func() { httpListenAndServe = old }()
+
+	srv := NewServer(9999, "secret")
+	err := srv.Start()
+	if err == nil {
+		t.Error("Start should fail when ListenAndServe fails")
+	}
+}
+
+func TestHandleWebhook_RateLimitExceeded(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+	srv := NewServer(9000, "secret")
+
+	body := `{"ref":"refs/heads/main"}`
+	reqBase := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	reqBase.Header.Set("X-GitHub-Event", "push")
+
+	// Exhaust rate limit for a specific IP
+	rec := httptest.NewRecorder()
+	for i := 0; i < 65; i++ {
+		req := reqBase.Clone(reqBase.Context())
+		// Reset recorder
+		rec = httptest.NewRecorder()
+		srv.handleWebhook(rec, req)
+	}
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 after rate limit, got %d", rec.Code)
+	}
+}
+
+func TestHandleWebhook_GitLabValidWithApp(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "gitlabapp", "main")
+
+	srv := NewServer(0, "my-token")
+	body := `{"ref":"refs/heads/main"}`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/gitlabapp", strings.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", "my-token")
+	req.Header.Set("X-Gitlab-Event", "Push Hook")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 for valid GitLab push, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleWebhook_DeployAlreadyInProgress(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	srv := NewServer(9000, "secret")
+
+	deployStarted := make(chan struct{})
+	srv.SetDeployHandler(func(appName string) error {
+		close(deployStarted)
+		time.Sleep(500 * time.Millisecond)
+		return nil
+	})
+
+	body := `{"ref":"refs/heads/main"}`
+	sig := webhookSignBody([]byte(body), "secret")
+
+	// First webhook
+	req1 := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req1.Header.Set("X-Hub-Signature-256", sig)
+	req1.Header.Set("X-GitHub-Event", "push")
+	rec1 := httptest.NewRecorder()
+	srv.handleWebhook(rec1, req1)
+
+	// Wait for deploy to start
+	<-deployStarted
+
+	// Second webhook while first is still running
+	req2 := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req2.Header.Set("X-Hub-Signature-256", sig)
+	req2.Header.Set("X-GitHub-Event", "push")
+	rec2 := httptest.NewRecorder()
+	srv.handleWebhook(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Errorf("Expected 200 for second webhook, got %d", rec2.Code)
+	}
+
+	// Wait for first deploy to finish
+	srv.deployWg.Wait()
+}
+
+func TestHandleWebhook_DeployTimeout(t *testing.T) {
+	oldTimeout := deployTimeout
+	deployTimeout = 50 * time.Millisecond
+	defer func() { deployTimeout = oldTimeout }()
+
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	srv := NewServer(9000, "secret")
+	srv.SetDeployHandler(func(appName string) error {
+		time.Sleep(200 * time.Millisecond)
+		return nil
+	})
+
+	body := `{"ref":"refs/heads/main"}`
+	sig := webhookSignBody([]byte(body), "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", sig)
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+
+	// Wait for deploy to finish (and timeout callback may have fired)
+	srv.deployWg.Wait()
+}
+
+type errorReader struct{}
+
+func (e *errorReader) Read(p []byte) (int, error) {
+	return 0, fmt.Errorf("read error")
+}
+
+func TestHandleWebhook_BodyReadError(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	srv := NewServer(9000, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", &errorReader{})
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500 for body read error, got %d", rec.Code)
+	}
+}
+
+func TestServer_ShutdownPath(t *testing.T) {
+	old := httpListenAndServe
+	httpListenAndServe = func(srv *http.Server) error {
+		return http.ErrServerClosed
+	}
+	defer func() { httpListenAndServe = old }()
+
+	srv := NewServer(9999, "secret")
+	err := srv.Start()
+	if err != nil {
+		t.Errorf("Start should return nil after graceful shutdown, got %v", err)
+	}
+}
+
 func TestIsValidAppName(t *testing.T) {
 	valid := []string{"myapp", "my-app-123", "ab", "app123app"}
 	for _, name := range valid {

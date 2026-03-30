@@ -12,24 +12,32 @@ import (
 	"strings"
 )
 
-func getMachineKey() ([]byte, error) {
+var (
+	osHostname   = os.Hostname
+	aesNewCipher = aes.NewCipher
+	cipherNewGCM = cipher.NewGCM
+	ioReadFull   = io.ReadFull
+	randRead     = rand.Read
+)
+
+func getMachineKey() []byte {
 	raw := getMachineID()
 	// Derive a proper 32-byte AES key using SHA-256
 	hash := sha256.Sum256([]byte("simpledeploy:" + raw))
-	return hash[:], nil
+	return hash[:]
 }
 
 func getMachineID() string {
 	// Try /etc/machine-id (Linux)
-	if data, err := os.ReadFile("/etc/machine-id"); err == nil {
+	if data, err := osReadFile("/etc/machine-id"); err == nil {
 		return strings.TrimSpace(string(data))
 	}
 	// Try /var/lib/dbus/machine-id (Linux)
-	if data, err := os.ReadFile("/var/lib/dbus/machine-id"); err == nil {
+	if data, err := osReadFile("/var/lib/dbus/machine-id"); err == nil {
 		return strings.TrimSpace(string(data))
 	}
 	// Fallback: hostname + username
-	hostname, _ := os.Hostname()
+	hostname, _ := osHostname()
 	user := os.Getenv("USER")
 	if user == "" {
 		user = "root"
@@ -38,23 +46,20 @@ func getMachineID() string {
 }
 
 func Encrypt(plaintext string) (string, error) {
-	key, err := getMachineKey()
-	if err != nil {
-		return "", fmt.Errorf("failed to get encryption key: %w", err)
-	}
+	key := getMachineKey()
 
-	block, err := aes.NewCipher(key)
+	block, err := aesNewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	aesGCM, err := cipher.NewGCM(block)
+	aesGCM, err := cipherNewGCM(block)
 	if err != nil {
 		return "", fmt.Errorf("failed to create GCM: %w", err)
 	}
 
 	nonce := make([]byte, aesGCM.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if _, err := ioReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
@@ -63,22 +68,19 @@ func Encrypt(plaintext string) (string, error) {
 }
 
 func Decrypt(encoded string) (string, error) {
-	key, err := getMachineKey()
-	if err != nil {
-		return "", fmt.Errorf("failed to get decryption key: %w", err)
-	}
+	key := getMachineKey()
 
 	data, err := hex.DecodeString(encoded)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode hex: %w", err)
 	}
 
-	block, err := aes.NewCipher(key)
+	block, err := aesNewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	aesGCM, err := cipher.NewGCM(block)
+	aesGCM, err := cipherNewGCM(block)
 	if err != nil {
 		return "", fmt.Errorf("failed to create GCM: %w", err)
 	}
@@ -99,7 +101,7 @@ func Decrypt(encoded string) (string, error) {
 
 func GenerateSecret(prefix string, length int) (string, error) {
 	bytes := make([]byte, length)
-	if _, err := rand.Read(bytes); err != nil {
+	if _, err := randRead(bytes); err != nil {
 		return "", fmt.Errorf("failed to generate secret: %w", err)
 	}
 	return prefix + hex.EncodeToString(bytes)[:length], nil
@@ -112,7 +114,7 @@ func GeneratePassword(length int) (string, error) {
 	i := 0
 	for i < length {
 		batch := make([]byte, length*2)
-		if _, err := rand.Read(batch); err != nil {
+		if _, err := randRead(batch); err != nil {
 			return "", fmt.Errorf("failed to generate password: %w", err)
 		}
 		for _, b := range batch {

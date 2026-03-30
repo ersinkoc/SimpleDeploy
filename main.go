@@ -9,17 +9,25 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
+// osExit is a variable so it can be overridden in tests.
+var osExit = os.Exit
+
 func main() {
+	osExit(run(os.Args))
+}
+
+func run(args []string) int {
 	config.Init()
 	state.InitState(config.HomeDataDir())
 
-	if len(os.Args) < 2 {
+	if len(args) < 2 {
 		cli.PrintUsage()
-		os.Exit(0)
+		return 0
 	}
 
-	if err := cli.Route(os.Args[1:]); err != nil {
+	if err := cli.Route(args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

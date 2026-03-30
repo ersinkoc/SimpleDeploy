@@ -15,7 +15,7 @@ func RunStatus() error {
 		return err
 	}
 
-	s, err := state.Load()
+	s, err := stateLoad()
 	if err != nil {
 		return err
 	}

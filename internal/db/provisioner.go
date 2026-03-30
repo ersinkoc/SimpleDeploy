@@ -7,6 +7,8 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
+var generatePassword = state.GeneratePassword
+
 type DatabaseConfig struct {
 	Type         string
 	Image        string
@@ -131,7 +133,7 @@ func ProvisionDatabases(appName string, selectedDBs []string) (map[string]string
 		password := ""
 		if dbType != "redis" {
 			var err error
-			password, err = state.GeneratePassword(20)
+			password, err = generatePassword(20)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("failed to generate password for %s: %w", dbType, err)
 			}

@@ -7,7 +7,6 @@ import (
 
 	"github.com/ersinkoc/SimpleDeploy/internal/runner"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
-	"github.com/ersinkoc/SimpleDeploy/internal/webhook"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
@@ -71,7 +70,7 @@ func RunWebhook(args []string) error {
 		}
 	}
 
-	srv := webhook.NewServer(port, cfg.WebhookSecret)
+	srv := webhookNewServer(port, cfg.WebhookSecret)
 	srv.SetDeployHandler(func(appName string) error {
 		return RunRedeploy([]string{appName})
 	})

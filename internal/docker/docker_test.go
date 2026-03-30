@@ -1,11 +1,572 @@
 package docker
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type mockCmd struct {
+	runErr         error
+	output         []byte
+	outputErr      error
+	combinedOutput []byte
+	combinedErr    error
+	ctx            context.Context
+	stdout         io.Writer
+	stderr         io.Writer
+	dir            string
+}
+
+func (m *mockCmd) SetDir(dir string)             { m.dir = dir }
+func (m *mockCmd) SetStdout(w io.Writer)         { m.stdout = w }
+func (m *mockCmd) SetStderr(w io.Writer)         { m.stderr = w }
+func (m *mockCmd) Output() ([]byte, error)       { return m.output, m.outputErr }
+func (m *mockCmd) CombinedOutput() ([]byte, error) {
+	if m.combinedErr != nil && len(m.combinedOutput) == 0 {
+		return nil, m.combinedErr
+	}
+	return m.combinedOutput, m.combinedErr
+}
+func (m *mockCmd) Run() error {
+	if m.runErr != nil {
+		return m.runErr
+	}
+	if m.ctx != nil {
+		select {
+		case <-m.ctx.Done():
+			return m.ctx.Err()
+		default:
+		}
+	}
+	return nil
+}
+
+func TestBuildImage_Timeout(t *testing.T) {
+	oldTimeout := buildTimeout
+	buildTimeout = 0
+	defer func() { buildTimeout = oldTimeout }()
+
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{ctx: ctx, runErr: context.DeadlineExceeded}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := BuildImage("/tmp", "app")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Expected timeout error, got %v", err)
+	}
+}
+
+func TestBuildImage_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("build failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := BuildImage("/tmp", "app")
+	if err == nil || !strings.Contains(err.Error(), "docker build failed") {
+		t.Fatalf("Expected build error, got %v", err)
+	}
+}
+
+func TestBuildImageWithDockerfile_Timeout(t *testing.T) {
+	oldTimeout := buildTimeout
+	buildTimeout = 0
+	defer func() { buildTimeout = oldTimeout }()
+
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{ctx: ctx, runErr: context.DeadlineExceeded}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := BuildImageWithDockerfile("/tmp", "/tmp/Dockerfile", "app")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Expected timeout error, got %v", err)
+	}
+}
+
+func TestBuildImageWithDockerfile_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("build failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := BuildImageWithDockerfile("/tmp", "/tmp/Dockerfile", "app")
+	if err == nil || !strings.Contains(err.Error(), "docker build failed") {
+		t.Fatalf("Expected build error, got %v", err)
+	}
+}
+
+func TestListImages_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{outputErr: errors.New("docker error")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := ListImages("app")
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestCleanupOldImages_ListError(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{outputErr: errors.New("docker error")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := CleanupOldImages("app", 1)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestCleanupOldImages_RemoveError(t *testing.T) {
+	oldList := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{output: []byte("app:v1\napp:v2\n")}
+	}
+	defer func() { newDockerCmdContext = oldList }()
+
+	oldTag := newDockerCmdContext
+	callCount := 0
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		callCount++
+		if callCount == 1 {
+			return &mockCmd{output: []byte("app:v1\napp:v2\n")}
+		}
+		return &mockCmd{runErr: errors.New("remove failed")}
+	}
+	defer func() { newDockerCmdContext = oldTag }()
+
+	// Should not return error; just prints warning
+	err := CleanupOldImages("app", 0)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+}
+
+func TestComposeUp_Timeout(t *testing.T) {
+	oldTimeout := composeTimeout
+	composeTimeout = 0
+	defer func() { composeTimeout = oldTimeout }()
+
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{ctx: ctx, runErr: context.DeadlineExceeded}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeUp("/tmp")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Expected timeout error, got %v", err)
+	}
+}
+
+func TestComposeUp_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("compose up failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeUp("/tmp")
+	if err == nil || !strings.Contains(err.Error(), "docker compose up failed") {
+		t.Fatalf("Expected error, got %v", err)
+	}
+}
+
+func TestComposeDown_Timeout(t *testing.T) {
+	oldTimeout := composeTimeout
+	composeTimeout = 0
+	defer func() { composeTimeout = oldTimeout }()
+
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{ctx: ctx, runErr: context.DeadlineExceeded}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeDown("/tmp")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Expected timeout error, got %v", err)
+	}
+}
+
+func TestComposeDown_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("compose down failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeDown("/tmp")
+	if err == nil || !strings.Contains(err.Error(), "docker compose down failed") {
+		t.Fatalf("Expected error, got %v", err)
+	}
+}
+
+func TestComposeRemove_Timeout(t *testing.T) {
+	oldTimeout := composeTimeout
+	composeTimeout = 0
+	defer func() { composeTimeout = oldTimeout }()
+
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{ctx: ctx, runErr: context.DeadlineExceeded}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeRemove("/tmp", true)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("Expected timeout error, got %v", err)
+	}
+}
+
+func TestComposeRemove_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("compose remove failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeRemove("/tmp", false)
+	if err == nil {
+		t.Fatalf("Expected error, got %v", err)
+	}
+}
+
+func TestComposeLogs_Follow(t *testing.T) {
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("follow interrupted")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := ComposeLogs("/tmp", "svc", true)
+	if err == nil {
+		t.Fatal("Expected error from follow mode")
+	}
+}
+
+func TestComposeLogs_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("logs failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ComposeLogs("/tmp", "", false)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestRestartContainer_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("restart failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := RestartContainer("c")
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestStopContainer_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("stop failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := StopContainer("c")
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestExecContainer_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("exec failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := ExecContainer("c", "echo")
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestListContainers_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{outputErr: errors.New("ps failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := ListContainers("")
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestRun_Error(t *testing.T) {
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("docker run failed")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := Run([]string{"ps"})
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestRunOutput_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{combinedErr: errors.New("docker output failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := RunOutput([]string{"ps"})
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestGetVersion_Error(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{outputErr: errors.New("version failed")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	_, err := GetVersion()
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+}
+
+func TestIsComposeInstalled_False(t *testing.T) {
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("not installed")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	if IsComposeInstalled() {
+		t.Fatal("Expected false")
+	}
+}
+
+func TestInstall_Success(t *testing.T) {
+	oldNew := newDockerCmd
+	var buf bytes.Buffer
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{stdout: &buf, stderr: &buf}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := Install()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+}
+
+func TestInstall_Error(t *testing.T) {
+	oldNew := newDockerCmd
+	var buf bytes.Buffer
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{stdout: &buf, stderr: &buf, runErr: errors.New("install failed")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := Install()
+	if err == nil || !strings.Contains(err.Error(), "Docker installation failed") {
+		t.Fatalf("Expected install error, got %v", err)
+	}
+}
+
+func TestEnsureDocker_InstallAndComposeSuccess(t *testing.T) {
+	oldLookPath := execLookPath
+	lookPathCalls := 0
+	execLookPath = func(file string) (string, error) {
+		lookPathCalls++
+		if lookPathCalls == 1 {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/docker", nil
+	}
+	defer func() { execLookPath = oldLookPath }()
+
+	oldConfirm := wizardConfirm
+	wizardConfirm = func(prompt string, defaultYes bool) bool { return true }
+	defer func() { wizardConfirm = oldConfirm }()
+
+	callCount := 0
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		callCount++
+		if name == "sh" {
+			return &mockCmd{} // Install succeeds
+		}
+		if strings.Contains(strings.Join(arg, " "), "compose version") {
+			return &mockCmd{} // Compose installed
+		}
+		return &mockCmd{output: []byte("Docker version 24.0")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := EnsureDocker()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+}
+
+func TestListContainers_WithLabelFilter(t *testing.T) {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{output: []byte("container1\ncontainer2\n")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	containers, err := ListContainers("simpledeploy=app")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("Expected 2 containers, got %d", len(containers))
+	}
+}
+
+func TestEnsureDocker_AlreadyInstalled_Mock(t *testing.T) {
+	oldLookPath := execLookPath
+	execLookPath = func(file string) (string, error) { return "/usr/bin/docker", nil }
+	defer func() { execLookPath = oldLookPath }()
+
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{output: []byte("Docker version 24.0")}
+	}
+	defer func() { newDockerCmdContext = oldNew }()
+
+	err := EnsureDocker()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+}
+
+func TestEnsureDocker_DeclineInstall(t *testing.T) {
+	oldLookPath := execLookPath
+	execLookPath = func(file string) (string, error) { return "", errors.New("not found") }
+	defer func() { execLookPath = oldLookPath }()
+
+	oldConfirm := wizardConfirm
+	wizardConfirm = func(prompt string, defaultYes bool) bool { return false }
+	defer func() { wizardConfirm = oldConfirm }()
+
+	err := EnsureDocker()
+	if err == nil || !strings.Contains(err.Error(), "Docker is required") {
+		t.Fatalf("Expected error, got %v", err)
+	}
+}
+
+func TestEnsureDocker_InstallError(t *testing.T) {
+	oldLookPath := execLookPath
+	execLookPath = func(file string) (string, error) { return "", errors.New("not found") }
+	defer func() { execLookPath = oldLookPath }()
+
+	oldConfirm := wizardConfirm
+	wizardConfirm = func(prompt string, defaultYes bool) bool { return true }
+	defer func() { wizardConfirm = oldConfirm }()
+
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("install failed")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := EnsureDocker()
+	if err == nil || !strings.Contains(err.Error(), "install failed") {
+		t.Fatalf("Expected error, got %v", err)
+	}
+}
+
+func TestEnsureDocker_MissingCompose(t *testing.T) {
+	oldLookPath := execLookPath
+	execLookPath = func(file string) (string, error) { return "", errors.New("not found") }
+	defer func() { execLookPath = oldLookPath }()
+
+	oldConfirm := wizardConfirm
+	wizardConfirm = func(prompt string, defaultYes bool) bool { return true }
+	defer func() { wizardConfirm = oldConfirm }()
+
+	callCount := 0
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		callCount++
+		if name == "sh" {
+			return &mockCmd{} // Install succeeds
+		}
+		// docker compose version
+		return &mockCmd{runErr: errors.New("compose missing")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	err := EnsureDocker()
+	if err == nil || !strings.Contains(err.Error(), "Docker Compose plugin is required") {
+		t.Fatalf("Expected compose error, got %v", err)
+	}
+}
+
+func TestNetworkExists_False(t *testing.T) {
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("not found")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	if NetworkExists("net") {
+		t.Fatal("Expected false")
+	}
+}
+
+func TestCreateNetwork_Error(t *testing.T) {
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("not found")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	oldCtx := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{combinedErr: errors.New("create failed")}
+	}
+	defer func() { newDockerCmdContext = oldCtx }()
+
+	err := CreateNetwork("net")
+	if err == nil || !strings.Contains(err.Error(), "failed to create network") {
+		t.Fatalf("Expected error, got %v", err)
+	}
+}
 
 func TestIsInstalled(t *testing.T) {
 	if !IsInstalled() {
@@ -251,7 +812,6 @@ func TestRestartContainer(t *testing.T) {
 	}
 	name := "qd-test-restart-check"
 
-
 	// Clean up
 	_ = Run([]string{"rm", "-f", name})
 
@@ -286,7 +846,6 @@ func TestExecContainer(t *testing.T) {
 		t.Skip("Docker not installed")
 	}
 	name := "qd-test-exec-check"
-
 
 	// Clean up
 	_ = Run([]string{"rm", "-f", name})

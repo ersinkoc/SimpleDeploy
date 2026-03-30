@@ -1,11 +1,30 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 )
+
+type mockStateFile struct {
+	writeErr error
+	syncErr  error
+	closeErr error
+	data     []byte
+}
+
+func (m *mockStateFile) Write(p []byte) (int, error) {
+	if m.writeErr != nil {
+		return 0, m.writeErr
+	}
+	m.data = append(m.data, p...)
+	return len(p), nil
+}
+
+func (m *mockStateFile) Sync() error  { return m.syncErr }
+func (m *mockStateFile) Close() error { return m.closeErr }
 
 func tempStateDir(t *testing.T) string {
 	t.Helper()
@@ -346,5 +365,258 @@ func TestSave_ReadOnlyDir(t *testing.T) {
 	err := Save(s)
 	if err == nil {
 		t.Error("Save should fail with read-only directory")
+	}
+}
+
+func TestLoad_ReadError(t *testing.T) {
+	tempStateDir(t)
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, errors.New("read error")
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	_, err := Load()
+	if err == nil {
+		t.Error("Load should fail on read error")
+	}
+}
+
+func TestSave_MkdirAllError(t *testing.T) {
+	tempStateDir(t)
+	oldMkdirAll := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return errors.New("mkdir error")
+	}
+	defer func() { osMkdirAll = oldMkdirAll }()
+
+	err := Save(&State{Version: 1})
+	if err == nil {
+		t.Error("Save should fail when MkdirAll fails")
+	}
+}
+
+func TestSave_MarshalError(t *testing.T) {
+	tempStateDir(t)
+	oldMarshal := jsonMarshalIndent
+	jsonMarshalIndent = func(v interface{}, prefix, indent string) ([]byte, error) {
+		return nil, errors.New("marshal error")
+	}
+	defer func() { jsonMarshalIndent = oldMarshal }()
+
+	err := Save(&State{Version: 1})
+	if err == nil {
+		t.Error("Save should fail when marshal fails")
+	}
+}
+
+func TestSave_OpenFileError(t *testing.T) {
+	tempStateDir(t)
+	oldOpenFile := osOpenFile
+	osOpenFile = func(name string, flag int, perm os.FileMode) (stateFile, error) {
+		return nil, errors.New("open error")
+	}
+	defer func() { osOpenFile = oldOpenFile }()
+
+	err := Save(&State{Version: 1})
+	if err == nil {
+		t.Error("Save should fail when OpenFile fails")
+	}
+}
+
+func TestSave_WriteError(t *testing.T) {
+	tempStateDir(t)
+	oldOpenFile := osOpenFile
+	osOpenFile = func(name string, flag int, perm os.FileMode) (stateFile, error) {
+		return &mockStateFile{writeErr: errors.New("write error")}, nil
+	}
+	defer func() { osOpenFile = oldOpenFile }()
+
+	err := Save(&State{Version: 1})
+	if err == nil {
+		t.Error("Save should fail when Write fails")
+	}
+}
+
+func TestSave_SyncError(t *testing.T) {
+	tempStateDir(t)
+	oldOpenFile := osOpenFile
+	osOpenFile = func(name string, flag int, perm os.FileMode) (stateFile, error) {
+		return &mockStateFile{syncErr: errors.New("sync error")}, nil
+	}
+	defer func() { osOpenFile = oldOpenFile }()
+
+	err := Save(&State{Version: 1})
+	if err == nil {
+		t.Error("Save should fail when Sync fails")
+	}
+}
+
+func TestSave_RenameError(t *testing.T) {
+	tempStateDir(t)
+	oldRename := osRename
+	osRename = func(oldpath, newpath string) error {
+		return errors.New("rename error")
+	}
+	defer func() { osRename = oldRename }()
+
+	err := Save(&State{Version: 1})
+	if err == nil {
+		t.Error("Save should fail when Rename fails")
+	}
+}
+
+func TestInitState_EmptyBaseDir_Error(t *testing.T) {
+	oldUserHomeDir := osUserHomeDir
+	osUserHomeDir = func() (string, error) {
+		return "", errors.New("no home")
+	}
+	defer func() { osUserHomeDir = oldUserHomeDir }()
+
+	InitState("")
+	expected := filepath.Join("", ".simpledeploy", "state.json")
+	if statePath != expected {
+		t.Errorf("statePath = %q, want %q", statePath, expected)
+	}
+}
+
+func TestGetStatePath_Fallback_Error(t *testing.T) {
+	oldStatePath := statePath
+	statePath = ""
+	defer func() { statePath = oldStatePath }()
+
+	oldUserHomeDir := osUserHomeDir
+	osUserHomeDir = func() (string, error) {
+		return "", errors.New("no home")
+	}
+	defer func() { osUserHomeDir = oldUserHomeDir }()
+
+	path := getStatePath()
+	expected := filepath.Join("", ".simpledeploy", "state.json")
+	if path != expected {
+		t.Errorf("getStatePath() = %q, want %q", path, expected)
+	}
+}
+
+func TestGetApp_LoadError(t *testing.T) {
+	tempStateDir(t)
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, errors.New("read error")
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	_, err := GetApp("myapp")
+	if err == nil {
+		t.Error("GetApp should fail when Load fails")
+	}
+}
+
+func TestSaveApp_LoadError(t *testing.T) {
+	tempStateDir(t)
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, errors.New("read error")
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	app := NewAppConfig()
+	app.Name = "myapp"
+	err := SaveApp(app)
+	if err == nil {
+		t.Error("SaveApp should fail when Load fails")
+	}
+}
+
+func TestSaveApp_SaveError(t *testing.T) {
+	tempStateDir(t)
+	oldMkdirAll := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return errors.New("mkdir error")
+	}
+	defer func() { osMkdirAll = oldMkdirAll }()
+
+	app := NewAppConfig()
+	app.Name = "myapp"
+	err := SaveApp(app)
+	if err == nil {
+		t.Error("SaveApp should fail when Save fails")
+	}
+}
+
+func TestRemoveApp_LoadError(t *testing.T) {
+	tempStateDir(t)
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, errors.New("read error")
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	err := RemoveApp("myapp")
+	if err == nil {
+		t.Error("RemoveApp should fail when Load fails")
+	}
+}
+
+func TestRemoveApp_SaveError(t *testing.T) {
+	tempStateDir(t)
+	oldMkdirAll := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return errors.New("mkdir error")
+	}
+	defer func() { osMkdirAll = oldMkdirAll }()
+
+	// First save without the mock so there's data to load
+	app := NewAppConfig()
+	app.Name = "myapp"
+	SaveApp(app)
+
+	err := RemoveApp("myapp")
+	if err == nil {
+		t.Error("RemoveApp should fail when Save fails")
+	}
+}
+
+func TestSaveConfig_LoadError(t *testing.T) {
+	tempStateDir(t)
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, errors.New("read error")
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	cfg := &GlobalConfig{Proxy: "traefik"}
+	err := SaveConfig(cfg)
+	if err == nil {
+		t.Error("SaveConfig should fail when Load fails")
+	}
+}
+
+func TestSaveConfig_SaveError(t *testing.T) {
+	tempStateDir(t)
+	oldMkdirAll := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return errors.New("mkdir error")
+	}
+	defer func() { osMkdirAll = oldMkdirAll }()
+
+	cfg := &GlobalConfig{Proxy: "traefik"}
+	err := SaveConfig(cfg)
+	if err == nil {
+		t.Error("SaveConfig should fail when Save fails")
+	}
+}
+
+func TestGetConfig_LoadError(t *testing.T) {
+	tempStateDir(t)
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, errors.New("read error")
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	_, err := GetConfig()
+	if err == nil {
+		t.Error("GetConfig should fail when Load fails")
 	}
 }

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,33 +13,55 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
+type commandRunner interface {
+	SetDir(string)
+	SetStdout(io.Writer)
+	SetStderr(io.Writer)
+	Run() error
+}
+
+type execWrapper struct {
+	*exec.Cmd
+}
+
+func (e *execWrapper) SetDir(dir string)       { e.Dir = dir }
+func (e *execWrapper) SetStdout(w io.Writer)   { e.Stdout = w }
+func (e *execWrapper) SetStderr(w io.Writer)   { e.Stderr = w }
+
+var (
+	osMkdirAll          = os.MkdirAll
+	osWriteFile         = os.WriteFile
+	dockerCreateNetwork = docker.CreateNetwork
+	execCommand         = func(name string, arg ...string) commandRunner { return &execWrapper{exec.Command(name, arg...)} }
+)
+
 func SetupCaddy(acmeEmail string) error {
 	wizard.Info("Setting up Caddy reverse proxy...")
 
-	if err := os.MkdirAll(getProxyDir(), 0755); err != nil {
+	if err := osMkdirAll(getProxyDir(), 0755); err != nil {
 		return fmt.Errorf("failed to create proxy directory: %w", err)
 	}
 
 	composeContent := generateCaddyCompose()
 	composePath := filepath.Join(getProxyDir(), "docker-compose.yml")
-	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
+	if err := osWriteFile(composePath, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write Caddy compose: %w", err)
 	}
 
 	caddyfile := fmt.Sprintf("{\n    email %s\n}\n", acmeEmail)
 	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
-	if err := os.WriteFile(caddyfilePath, []byte(caddyfile), 0644); err != nil {
+	if err := osWriteFile(caddyfilePath, []byte(caddyfile), 0644); err != nil {
 		return fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
 
-	if err := docker.CreateNetwork("simpledeploy"); err != nil {
+	if err := dockerCreateNetwork("simpledeploy"); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("docker", "compose", "up", "-d")
-	cmd.Dir = getProxyDir()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := execCommand("docker", "compose", "up", "-d")
+	cmd.SetDir(getProxyDir())
+	cmd.SetStdout(os.Stdout)
+	cmd.SetStderr(os.Stderr)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to start Caddy: %w", err)
 	}

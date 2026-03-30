@@ -8,9 +8,6 @@ import (
 	"time"
 
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
-	"github.com/ersinkoc/SimpleDeploy/internal/docker"
-	"github.com/ersinkoc/SimpleDeploy/internal/git"
-	"github.com/ersinkoc/SimpleDeploy/internal/proxy"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -39,7 +36,7 @@ func RunRedeploy(args []string) error {
 	// Decrypt git token
 	gitToken := app.GitToken
 	if gitToken != "" {
-		decrypted, err := state.Decrypt(gitToken)
+		decrypted, err := stateDecrypt(gitToken)
 		if err == nil {
 			gitToken = decrypted
 		} else {
@@ -49,14 +46,14 @@ func RunRedeploy(args []string) error {
 
 	// Pull latest
 	wizard.Info("Pulling latest changes...")
-	if err := git.Pull(sourceDir, app.Branch, gitToken); err != nil {
+	if err := gitPull(sourceDir, app.Branch, gitToken); err != nil {
 		return fmt.Errorf("git pull failed: %w", err)
 	}
 	wizard.Success("Repository updated")
 
 	// Build new image
 	wizard.Info("Building new image...")
-	imageTag, err := docker.BuildImage(sourceDir, appName)
+	imageTag, err := dockerBuildImage(sourceDir, appName)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -64,27 +61,27 @@ func RunRedeploy(args []string) error {
 
 	// Update the image tag in the existing compose file
 	composePath := filepath.Join(appDir, "docker-compose.yml")
-	composeData, err := os.ReadFile(composePath)
+	composeData, err := osReadFile(composePath)
 	if err != nil {
 		return fmt.Errorf("failed to read compose file: %w", err)
 	}
 
 	// Replace only the app service's image line (first occurrence under the app name)
 	newCompose := replaceAppImage(string(composeData), appName, imageTag)
-	if err := os.WriteFile(composePath, []byte(newCompose), 0644); err != nil {
+	if err := osWriteFile(composePath, []byte(newCompose), 0644); err != nil {
 		return fmt.Errorf("failed to update compose: %w", err)
 	}
 
 	// Restart
 	wizard.Info("Restarting containers...")
-	if err := docker.ComposeUp(appDir); err != nil {
+	if err := dockerComposeUp(appDir); err != nil {
 		return fmt.Errorf("failed to restart: %w", err)
 	}
 	wizard.Success("Containers restarted")
 
 	// Reload Caddy if applicable
 	if cfg.Proxy == "caddy" {
-		if err := proxy.ReloadCaddy(); err != nil {
+		if err := proxyReloadCaddy(); err != nil {
 			wizard.Warn("Failed to reload Caddy: " + err.Error())
 		}
 	}
@@ -96,7 +93,7 @@ func RunRedeploy(args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
 			}
 		}()
-		docker.CleanupOldImages(appName, 3)
+		dockerCleanupOldImages(appName, 3)
 	}()
 
 	// Update state
@@ -104,7 +101,7 @@ func RunRedeploy(args []string) error {
 	app.Status = "running"
 	app.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	app.DeployCount++
-	if err := state.SaveApp(app); err != nil {
+	if err := stateSaveApp(app); err != nil {
 		return err
 	}
 

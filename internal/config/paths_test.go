@@ -77,6 +77,20 @@ func TestHomeDataDir(t *testing.T) {
 	}
 }
 
+func TestHomeDataDir_ErrorFallback(t *testing.T) {
+	old := osUserHomeDir
+	osUserHomeDir = func() (string, error) {
+		return "", os.ErrNotExist
+	}
+	defer func() { osUserHomeDir = old }()
+
+	dir := HomeDataDir()
+	expected := filepath.Join("/root", ".simpledeploy")
+	if dir != expected {
+		t.Errorf("HomeDataDir() = %q, want %q", dir, expected)
+	}
+}
+
 func TestStatePath(t *testing.T) {
 	sp := StatePath()
 	expected := filepath.Join(HomeDataDir(), "state.json")

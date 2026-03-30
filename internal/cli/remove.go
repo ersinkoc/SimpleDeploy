@@ -5,9 +5,6 @@ import (
 	"os"
 
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
-	"github.com/ersinkoc/SimpleDeploy/internal/docker"
-	"github.com/ersinkoc/SimpleDeploy/internal/proxy"
-	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
@@ -17,12 +14,12 @@ func RunRemove(args []string) error {
 		return err
 	}
 
-	app, err := state.GetApp(appName)
+	app, err := stateGetApp(appName)
 	if err != nil {
 		return err
 	}
 
-	cfg, err := state.GetConfig()
+	cfg, err := stateGetConfig()
 	if err != nil {
 		wizard.Warn("Could not load config: " + err.Error())
 	}
@@ -49,29 +46,29 @@ func RunRemove(args []string) error {
 
 	// Stop and remove containers
 	wizard.Info("Stopping containers...")
-	if err := docker.ComposeRemove(appDir, removeVolumes); err != nil {
+	if err := dockerComposeRemove(appDir, removeVolumes); err != nil {
 		wizard.Warn("Failed to remove containers: " + err.Error())
 	}
 
 	// Proxy cleanup
 	if cfg != nil && cfg.Proxy == "caddy" {
 		wizard.Info("Removing from Caddyfile...")
-		if err := proxy.RemoveCaddyApp(app.Domain); err != nil {
+		if err := proxyRemoveCaddyApp(app.Domain); err != nil {
 			wizard.Warn("Failed to remove from Caddyfile: " + err.Error())
 		}
-		if err := proxy.ReloadCaddy(); err != nil {
+		if err := proxyReloadCaddy(); err != nil {
 			wizard.Warn("Failed to reload Caddy: " + err.Error())
 		}
 	}
 
 	// Remove app directory
 	wizard.Info("Removing application files...")
-	if err := os.RemoveAll(appDir); err != nil {
+	if err := osRemoveAll(appDir); err != nil {
 		wizard.Warn("Failed to remove app directory: " + err.Error())
 	}
 
 	// Remove from state
-	if err := state.RemoveApp(appName); err != nil {
+	if err := stateRemoveApp(appName); err != nil {
 		return fmt.Errorf("failed to remove app from state: %w", err)
 	}
 
@@ -82,7 +79,7 @@ func RunRemove(args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
 			}
 		}()
-		docker.CleanupOldImages(appName, 0)
+		dockerCleanupOldImages(appName, 0)
 	}()
 
 	wizard.Success(fmt.Sprintf("Application '%s' removed", appName))

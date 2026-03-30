@@ -8,8 +8,14 @@ import (
 	"strings"
 )
 
+var (
+	osMkdirAll   = os.MkdirAll
+	osCreateTemp = os.CreateTemp
+	osWriteFile  = os.WriteFile
+)
+
 func Clone(repoURL, branch, destDir, token string) error {
-	if err := os.MkdirAll(filepath.Dir(destDir), 0755); err != nil {
+	if err := osMkdirAll(filepath.Dir(destDir), 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -86,23 +92,22 @@ func IsRepo(dir string) bool {
 // writeAskpassScript creates a temporary script that echoes the token
 // without exposing it in process arguments.
 func writeAskpassScript(token string) (path string, cleanup func(), err error) {
-	f, err := os.CreateTemp("", "qd-askpass-*.sh")
+	f, err := osCreateTemp("", "qd-askpass-*.sh")
 	if err != nil {
 		return "", nil, err
 	}
+	name := f.Name()
+	f.Close()
 	// Use printf to avoid single-quote injection in the token value
 	script := "#!/bin/sh\nprintf '%s\\n' \"$QD_GIT_TOKEN\"\n"
-	if _, err := f.WriteString(script); err != nil {
-		f.Close()
-		os.Remove(f.Name())
+	if err := osWriteFile(name, []byte(script), 0700); err != nil {
+		os.Remove(name)
 		return "", nil, err
 	}
-	f.Chmod(0700)
-	f.Close()
 
 	// Return the token via environment variable instead of embedding in script
-	cleanup = func() { os.Remove(f.Name()) }
-	return f.Name(), cleanup, nil
+	cleanup = func() { os.Remove(name) }
+	return name, cleanup, nil
 }
 
 // sanitizeOutput removes any token-like strings from git output.

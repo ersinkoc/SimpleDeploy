@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/ersinkoc/SimpleDeploy/internal/docker"
-	"github.com/ersinkoc/SimpleDeploy/internal/proxy"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -15,7 +13,7 @@ func RunInit() error {
 
 	// 1. Docker check
 	wizard.Info("Checking Docker installation...")
-	if err := docker.EnsureDocker(); err != nil {
+	if err := dockerEnsureDocker(); err != nil {
 		return err
 	}
 
@@ -58,7 +56,7 @@ func RunInit() error {
 	fmt.Println()
 	var webhookSecret string
 	if wizard.Confirm("Auto-generate webhook secret?", true) {
-		secret, err := state.GenerateSecret("whk_", 32)
+		secret, err := stateGenerateSecret("whk_", 32)
 		if err != nil {
 			return fmt.Errorf("failed to generate secret: %w", err)
 		}
@@ -88,18 +86,18 @@ func RunInit() error {
 		WebhookSecret: webhookSecret,
 	}
 
-	if err := state.SaveConfig(cfg); err != nil {
+	if err := stateSaveConfig(cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	// 6. Setup reverse proxy
 	fmt.Println()
 	if proxyType == "traefik" {
-		if err := proxy.SetupTraefik(acmeEmail); err != nil {
+		if err := proxySetupTraefik(acmeEmail); err != nil {
 			return fmt.Errorf("failed to setup Traefik: %w", err)
 		}
 	} else {
-		if err := proxy.SetupCaddy(acmeEmail); err != nil {
+		if err := proxySetupCaddy(acmeEmail); err != nil {
 			return fmt.Errorf("failed to setup Caddy: %w", err)
 		}
 	}

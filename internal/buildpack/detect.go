@@ -85,10 +85,7 @@ func detectNodePort(repoDir string) int {
 		return 3000
 	}
 	if strings.Contains(content, `"port"`) {
-		// Try to extract port from PORT env variable reference
-		if idx := strings.Index(content, "port"); idx > 0 {
-			return 3000
-		}
+		return 3000
 	}
 	return 3000
 }

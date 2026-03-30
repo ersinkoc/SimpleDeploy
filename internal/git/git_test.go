@@ -19,6 +19,111 @@ func TestClone_InvalidRepo(t *testing.T) {
 	}
 }
 
+func TestClone_MkdirAllError(t *testing.T) {
+	old := osMkdirAll
+	osMkdirAll = func(path string, perm os.FileMode) error {
+		return os.ErrPermission
+	}
+	defer func() { osMkdirAll = old }()
+
+	err := Clone("https://github.com/test/repo.git", "main", "/tmp/dest", "")
+	if err == nil {
+		t.Error("Clone should fail when MkdirAll fails")
+	}
+}
+
+func TestClone_WriteAskpassError(t *testing.T) {
+	old := osCreateTemp
+	osCreateTemp = func(dir, pattern string) (*os.File, error) {
+		return nil, os.ErrPermission
+	}
+	defer func() { osCreateTemp = old }()
+
+	tmpDir := t.TempDir()
+	err := Clone("https://github.com/test/repo.git", "main", filepath.Join(tmpDir, "dest"), "token")
+	if err == nil {
+		t.Error("Clone should fail when askpass script creation fails")
+	}
+}
+
+func TestWriteAskpassScript_CreateTempError(t *testing.T) {
+	old := osCreateTemp
+	osCreateTemp = func(dir, pattern string) (*os.File, error) {
+		return nil, os.ErrPermission
+	}
+	defer func() { osCreateTemp = old }()
+
+	_, _, err := writeAskpassScript("token")
+	if err == nil {
+		t.Error("writeAskpassScript should fail when CreateTemp fails")
+	}
+}
+
+func TestWriteAskpassScript_WriteFileError(t *testing.T) {
+	old := osWriteFile
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		return os.ErrPermission
+	}
+	defer func() { osWriteFile = old }()
+
+	_, _, err := writeAskpassScript("token")
+	if err == nil {
+		t.Error("writeAskpassScript should fail when WriteFile fails")
+	}
+}
+
+func TestPull_WithToken(t *testing.T) {
+	repoDir := t.TempDir()
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v1"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
+
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	Clone(repoDir, "master", cloneDir, "")
+
+	// Update original
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v2"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "update")
+
+	// Pull with token (on local repo, token is ignored but path is exercised)
+	if err := Pull(cloneDir, "master", "test-token"); err != nil {
+		t.Fatalf("Pull with token failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(cloneDir, "file.txt"))
+	if string(data) != "v2" {
+		t.Error("Pull should update files")
+	}
+}
+
+func TestPull_WriteAskpassError(t *testing.T) {
+	repoDir := t.TempDir()
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v1"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
+
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	Clone(repoDir, "master", cloneDir, "")
+
+	old := osCreateTemp
+	osCreateTemp = func(dir, pattern string) (*os.File, error) {
+		return nil, os.ErrPermission
+	}
+	defer func() { osCreateTemp = old }()
+
+	err := Pull(cloneDir, "master", "token")
+	if err == nil {
+		t.Error("Pull should fail when askpass script creation fails")
+	}
+}
+
 func TestSanitizeOutput(t *testing.T) {
 	tests := []struct {
 		name     string

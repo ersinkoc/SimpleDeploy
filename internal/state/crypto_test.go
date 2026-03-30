@@ -1,6 +1,11 @@
 package state
 
 import (
+	"crypto/cipher"
+	"crypto/rand"
+	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -204,11 +209,154 @@ func TestGetMachineID(t *testing.T) {
 }
 
 func TestGetMachineKey(t *testing.T) {
-	key, err := getMachineKey()
-	if err != nil {
-		t.Fatalf("getMachineKey failed: %v", err)
-	}
+	key := getMachineKey()
 	if len(key) != 32 {
 		t.Errorf("Key length = %d, want 32 (AES-256)", len(key))
+	}
+}
+
+func TestGetMachineID_HostnameError(t *testing.T) {
+	oldHostname := osHostname
+	osHostname = func() (string, error) {
+		return "", errors.New("hostname error")
+	}
+	defer func() { osHostname = oldHostname }()
+
+	id := getMachineID()
+	if !strings.Contains(id, ":root:simpledeploy") {
+		t.Errorf("Expected fallback with root user, got %q", id)
+	}
+}
+
+func TestEncrypt_AesNewCipherError(t *testing.T) {
+	old := aesNewCipher
+	aesNewCipher = func(key []byte) (cipher.Block, error) {
+		return nil, errors.New("cipher error")
+	}
+	defer func() { aesNewCipher = old }()
+
+	_, err := Encrypt("test")
+	if err == nil {
+		t.Error("Encrypt should fail when aesNewCipher fails")
+	}
+}
+
+func TestEncrypt_CipherNewGCMError(t *testing.T) {
+	old := cipherNewGCM
+	cipherNewGCM = func(block cipher.Block) (cipher.AEAD, error) {
+		return nil, errors.New("gcm error")
+	}
+	defer func() { cipherNewGCM = old }()
+
+	_, err := Encrypt("test")
+	if err == nil {
+		t.Error("Encrypt should fail when cipherNewGCM fails")
+	}
+}
+
+func TestEncrypt_IoReadFullError(t *testing.T) {
+	old := ioReadFull
+	ioReadFull = func(r io.Reader, buf []byte) (int, error) {
+		return 0, errors.New("nonce error")
+	}
+	defer func() { ioReadFull = old }()
+
+	_, err := Encrypt("test")
+	if err == nil {
+		t.Error("Encrypt should fail when ioReadFull fails")
+	}
+}
+
+func TestDecrypt_AesNewCipherError(t *testing.T) {
+	enc, _ := Encrypt("test")
+	old := aesNewCipher
+	aesNewCipher = func(key []byte) (cipher.Block, error) {
+		return nil, errors.New("cipher error")
+	}
+	defer func() { aesNewCipher = old }()
+
+	_, err := Decrypt(enc)
+	if err == nil {
+		t.Error("Decrypt should fail when aesNewCipher fails")
+	}
+}
+
+func TestDecrypt_CipherNewGCMError(t *testing.T) {
+	enc, _ := Encrypt("test")
+	old := cipherNewGCM
+	cipherNewGCM = func(block cipher.Block) (cipher.AEAD, error) {
+		return nil, errors.New("gcm error")
+	}
+	defer func() { cipherNewGCM = old }()
+
+	_, err := Decrypt(enc)
+	if err == nil {
+		t.Error("Decrypt should fail when cipherNewGCM fails")
+	}
+}
+
+func TestGenerateSecret_RandReadError(t *testing.T) {
+	old := randRead
+	randRead = func(b []byte) (int, error) {
+		return 0, errors.New("rand error")
+	}
+	defer func() { randRead = old }()
+
+	_, err := GenerateSecret("pre_", 16)
+	if err == nil {
+		t.Error("GenerateSecret should fail when randRead fails")
+	}
+}
+
+func TestGetMachineID_EtcMachineID(t *testing.T) {
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		if name == "/etc/machine-id" {
+			return []byte("abc123\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	id := getMachineID()
+	if id != "abc123" {
+		t.Errorf("getMachineID() = %q, want 'abc123'", id)
+	}
+}
+
+func TestGetMachineID_DBusMachineID(t *testing.T) {
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		if name == "/etc/machine-id" {
+			return nil, os.ErrNotExist
+		}
+		if name == "/var/lib/dbus/machine-id" {
+			return []byte("dbus456\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	defer func() { osReadFile = oldReadFile }()
+
+	id := getMachineID()
+	if id != "dbus456" {
+		t.Errorf("getMachineID() = %q, want 'dbus456'", id)
+	}
+}
+
+func TestGeneratePassword_RandReadError(t *testing.T) {
+	old := randRead
+	calls := 0
+	randRead = func(b []byte) (int, error) {
+		calls++
+		if calls == 1 {
+			return 0, errors.New("rand error")
+		}
+		return rand.Read(b)
+	}
+	defer func() { randRead = old }()
+
+	_, err := GeneratePassword(16)
+	if err == nil {
+		t.Error("GeneratePassword should fail when randRead fails")
 	}
 }

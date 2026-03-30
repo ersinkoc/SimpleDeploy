@@ -2,13 +2,12 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
-const version = "0.0.3"
+const version = "0.0.4"
 
 func PrintUsage() {
 	fmt.Printf("SimpleDeploy v%s — Single-Binary PaaS CLI\n", version)
@@ -95,7 +94,7 @@ func appNameFromArgs(args []string) (string, error) {
 }
 
 func homeDir() string {
-	home, err := os.UserHomeDir()
+	home, err := osUserHomeDir()
 	if err != nil {
 		return "/root"
 	}

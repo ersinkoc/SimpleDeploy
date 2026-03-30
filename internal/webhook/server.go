@@ -17,7 +17,12 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
-var validAppNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`)
+var (
+	validAppNameRe     = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`)
+	cleanupInterval    = time.Minute
+	httpListenAndServe = func(srv *http.Server) error { return srv.ListenAndServe() }
+	deployTimeout      = 30 * time.Minute
+)
 
 func isValidAppName(name string) bool {
 	return validAppNameRe.MatchString(name)
@@ -45,7 +50,7 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 	// Cleanup stale entries every minute
 	go func() {
 		for {
-			time.Sleep(time.Minute)
+			time.Sleep(cleanupInterval)
 			rl.mu.Lock()
 			for ip, v := range rl.visitors {
 				if time.Since(v.lastSeen) > rl.window {
@@ -122,7 +127,7 @@ func (s *Server) Start() error {
 		srv.Shutdown(ctx)
 	}()
 
-	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+	if err := httpListenAndServe(srv); err != http.ErrServerClosed {
 		return err
 	}
 
@@ -234,7 +239,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Webhook triggered deploy for %s", appName)
 
 			// Safety: release lock after 30 min even if deploy hangs
-			timer := time.AfterFunc(30*time.Minute, func() {
+			timer := time.AfterFunc(deployTimeout, func() {
 				s.deployMu.Lock()
 				delete(s.deployLocks, appName)
 				s.deployMu.Unlock()
