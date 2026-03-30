@@ -6,20 +6,29 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
-var ServiceDir = "/opt/simpledeploy/service"
+// ServiceDir can be overridden for testing. Defaults to config.BaseDir/service.
+var ServiceDir string
+
+func getServiceDir() string {
+	if ServiceDir != "" {
+		return ServiceDir
+	}
+	return config.ServiceDir()
+}
 
 func InstallService(baseDomain string, webhookPort int) error {
 	wizard.Info("Installing SimpleDeploy as a service...")
 
-	if err := os.MkdirAll(ServiceDir, 0755); err != nil {
+	if err := os.MkdirAll(getServiceDir(), 0755); err != nil {
 		return fmt.Errorf("failed to create service directory: %w", err)
 	}
 
 	composeContent := generateServiceCompose(baseDomain, webhookPort)
-	composePath := filepath.Join(ServiceDir, "docker-compose.yml")
+	composePath := filepath.Join(getServiceDir(), "docker-compose.yml")
 	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write service compose: %w", err)
 	}
@@ -32,7 +41,7 @@ func InstallService(baseDomain string, webhookPort int) error {
 
 func StartService() error {
 	cmd := exec.Command("docker", "compose", "up", "-d")
-	cmd.Dir = ServiceDir
+	cmd.Dir = getServiceDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -40,7 +49,7 @@ func StartService() error {
 
 func StopService() error {
 	cmd := exec.Command("docker", "compose", "down")
-	cmd.Dir = ServiceDir
+	cmd.Dir = getServiceDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

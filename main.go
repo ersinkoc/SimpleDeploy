@@ -6,10 +6,12 @@ import (
 
 	"github.com/ersinkoc/SimpleDeploy/internal/cli"
 	"github.com/ersinkoc/SimpleDeploy/internal/config"
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
 func main() {
 	config.Init()
+	state.InitState(config.HomeDataDir())
 
 	if len(os.Args) < 2 {
 		cli.PrintUsage()

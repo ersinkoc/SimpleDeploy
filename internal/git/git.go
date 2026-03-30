@@ -37,8 +37,20 @@ func Clone(repoURL, branch, destDir, token string) error {
 	return nil
 }
 
-func Pull(repoDir, branch string) error {
+func Pull(repoDir, branch string, token ...string) error {
 	cmd := exec.Command("git", "-C", repoDir, "pull", "origin", branch)
+	if len(token) > 0 && token[0] != "" {
+		askpass, cleanup, err := writeAskpassScript(token[0])
+		if err != nil {
+			return fmt.Errorf("failed to create askpass script: %w", err)
+		}
+		defer cleanup()
+		cmd.Env = append(os.Environ(),
+			"GIT_ASKPASS="+askpass,
+			"GIT_TERMINAL_PROMPT=0",
+			"QD_GIT_TOKEN="+token[0],
+		)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git pull failed: %s: %w", string(output), err)

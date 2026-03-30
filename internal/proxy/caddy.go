@@ -15,18 +15,18 @@ import (
 func SetupCaddy(acmeEmail string) error {
 	wizard.Info("Setting up Caddy reverse proxy...")
 
-	if err := os.MkdirAll(ProxyDir, 0755); err != nil {
+	if err := os.MkdirAll(getProxyDir(), 0755); err != nil {
 		return fmt.Errorf("failed to create proxy directory: %w", err)
 	}
 
 	composeContent := generateCaddyCompose()
-	composePath := filepath.Join(ProxyDir, "docker-compose.yml")
+	composePath := filepath.Join(getProxyDir(), "docker-compose.yml")
 	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write Caddy compose: %w", err)
 	}
 
 	caddyfile := fmt.Sprintf("{\n    email %s\n}\n", acmeEmail)
-	caddyfilePath := filepath.Join(ProxyDir, "Caddyfile")
+	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
 	if err := os.WriteFile(caddyfilePath, []byte(caddyfile), 0644); err != nil {
 		return fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
@@ -36,7 +36,7 @@ func SetupCaddy(acmeEmail string) error {
 	}
 
 	cmd := exec.Command("docker", "compose", "up", "-d")
-	cmd.Dir = ProxyDir
+	cmd.Dir = getProxyDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -54,7 +54,7 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 		return fmt.Errorf("invalid domain: %q", domain)
 	}
 
-	caddyfilePath := filepath.Join(ProxyDir, "Caddyfile")
+	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
 	data, err := os.ReadFile(caddyfilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read Caddyfile: %w", err)
@@ -73,7 +73,7 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 }
 
 func RemoveCaddyApp(domain string) error {
-	caddyfilePath := filepath.Join(ProxyDir, "Caddyfile")
+	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
 	data, err := os.ReadFile(caddyfilePath)
 	if err != nil {
 		return err
@@ -109,7 +109,7 @@ func ReloadCaddy() error {
 
 func StopCaddy() error {
 	cmd := exec.Command("docker", "compose", "down")
-	cmd.Dir = ProxyDir
+	cmd.Dir = getProxyDir()
 	return cmd.Run()
 }
 

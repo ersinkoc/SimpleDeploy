@@ -7,11 +7,20 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
-var ProxyDir = "/opt/simpledeploy/proxy"
+// ProxyDir can be overridden for testing. Defaults to config.BaseDir/proxy.
+var ProxyDir string
+
+func getProxyDir() string {
+	if ProxyDir != "" {
+		return ProxyDir
+	}
+	return config.ProxyDir()
+}
 
 func SetupTraefik(acmeEmail string) error {
 	wizard.Info("Setting up Traefik reverse proxy...")
@@ -21,14 +30,14 @@ func SetupTraefik(acmeEmail string) error {
 	}
 
 	composeContent := generateTraefikCompose(acmeEmail)
-	composePath := filepath.Join(ProxyDir, "docker-compose.yml")
+	composePath := filepath.Join(getProxyDir(), "docker-compose.yml")
 
 	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write Traefik compose: %w", err)
 	}
 
 	// Write .env for ACME email
-	envPath := filepath.Join(ProxyDir, ".env")
+	envPath := filepath.Join(getProxyDir(), ".env")
 	envContent := fmt.Sprintf("ACME_EMAIL=%s\n", acmeEmail)
 	if err := os.WriteFile(envPath, []byte(envContent), 0644); err != nil {
 		return fmt.Errorf("failed to write proxy .env: %w", err)
@@ -41,7 +50,7 @@ func SetupTraefik(acmeEmail string) error {
 
 	// Start Traefik
 	cmd := exec.Command("docker", "compose", "up", "-d")
-	cmd.Dir = ProxyDir
+	cmd.Dir = getProxyDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -54,13 +63,13 @@ func SetupTraefik(acmeEmail string) error {
 
 func StopTraefik() error {
 	cmd := exec.Command("docker", "compose", "down")
-	cmd.Dir = ProxyDir
+	cmd.Dir = getProxyDir()
 	return cmd.Run()
 }
 
 func RestartTraefik() error {
 	cmd := exec.Command("docker", "compose", "restart")
-	cmd.Dir = ProxyDir
+	cmd.Dir = getProxyDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

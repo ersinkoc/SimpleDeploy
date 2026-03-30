@@ -155,8 +155,8 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read body
-	body, err := io.ReadAll(r.Body)
+	// Read body (limit to 10 MB to prevent memory exhaustion)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
@@ -218,7 +218,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Trigger deploy (serialized per app)
 	if s.deploy != nil {
+		s.deployWg.Add(1)
 		go func() {
+			defer s.deployWg.Done()
+
 			s.deployMu.Lock()
 			if s.deployLocks[appName] {
 				s.deployMu.Unlock()
@@ -227,9 +230,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			}
 			s.deployLocks[appName] = true
 			s.deployMu.Unlock()
-
-			s.deployWg.Add(1)
-			defer s.deployWg.Done()
 
 			log.Printf("Webhook triggered deploy for %s", appName)
 

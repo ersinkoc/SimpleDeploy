@@ -49,7 +49,7 @@ func RunRedeploy(args []string) error {
 
 	// Pull latest
 	wizard.Info("Pulling latest changes...")
-	if err := git.Pull(sourceDir, app.Branch); err != nil {
+	if err := git.Pull(sourceDir, app.Branch, gitToken); err != nil {
 		return fmt.Errorf("git pull failed: %w", err)
 	}
 	wizard.Success("Repository updated")
