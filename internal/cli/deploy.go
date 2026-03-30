@@ -313,7 +313,9 @@ func RunDeploy() error {
 	}
 
 	// Update state
-	app.Status = "running"
+		if app.Status != "error" {
+			app.Status = "running"
+		}
 	app.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	app.DeployCount = 1
 
