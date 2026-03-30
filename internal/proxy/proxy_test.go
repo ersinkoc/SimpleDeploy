@@ -542,7 +542,7 @@ func TestSetupCaddy_ReadOnlyDir(t *testing.T) {
 	defer os.Chmod(readOnlyDir, 0755)
 
 	ProxyDir = filepath.Join(readOnlyDir, "nested", "proxy")
-	defer func() { ProxyDir = "/opt/simpledeploy/proxy" }()
+	defer func() { ProxyDir = "" }()
 
 	err := SetupCaddy("test@test.com")
 	if err == nil {
@@ -565,7 +565,7 @@ func TestSetupTraefik_ReadOnlyDir(t *testing.T) {
 	defer os.Chmod(readOnlyDir, 0755)
 
 	ProxyDir = filepath.Join(readOnlyDir, "nested", "proxy")
-	defer func() { ProxyDir = "/opt/simpledeploy/proxy" }()
+	defer func() { ProxyDir = "" }()
 
 	err := SetupTraefik("test@test.com")
 	if err == nil {

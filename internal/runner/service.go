@@ -35,7 +35,7 @@ func InstallService(baseDomain string, webhookPort int) error {
 
 	wizard.Success("Service compose written to " + composePath)
 	wizard.Info("Build the image first: docker build -t simpledeploy:latest .")
-	wizard.Info("Then start: cd " + ServiceDir + " && docker compose up -d")
+	wizard.Info("Then start: cd " + getServiceDir() + " && docker compose up -d")
 	return nil
 }
 

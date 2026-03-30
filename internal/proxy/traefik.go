@@ -25,7 +25,7 @@ func getProxyDir() string {
 func SetupTraefik(acmeEmail string) error {
 	wizard.Info("Setting up Traefik reverse proxy...")
 
-	if err := os.MkdirAll(ProxyDir, 0755); err != nil {
+	if err := os.MkdirAll(getProxyDir(), 0755); err != nil {
 		return fmt.Errorf("failed to create proxy directory: %w", err)
 	}
 
