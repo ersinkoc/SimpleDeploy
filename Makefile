@@ -1,7 +1,7 @@
 .PHONY: build test clean release docker lint
 
 BINARY := simpledeploy
-VERSION := 0.0.4
+VERSION := 0.0.5
 LDFLAGS := -s -w
 
 build:

@@ -8,10 +8,9 @@ import (
 )
 
 type AppType struct {
-	Name        string
-	Detected    bool
-	Port        int
-	Entrypoint  string
+	Name     string
+	Detected bool
+	Port     int
 }
 
 const (
