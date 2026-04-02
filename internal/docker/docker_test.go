@@ -23,10 +23,10 @@ type mockCmd struct {
 	dir            string
 }
 
-func (m *mockCmd) SetDir(dir string)             { m.dir = dir }
-func (m *mockCmd) SetStdout(w io.Writer)         { m.stdout = w }
-func (m *mockCmd) SetStderr(w io.Writer)         { m.stderr = w }
-func (m *mockCmd) Output() ([]byte, error)       { return m.output, m.outputErr }
+func (m *mockCmd) SetDir(dir string)       { m.dir = dir }
+func (m *mockCmd) SetStdout(w io.Writer)   { m.stdout = w }
+func (m *mockCmd) SetStderr(w io.Writer)   { m.stderr = w }
+func (m *mockCmd) Output() ([]byte, error) { return m.output, m.outputErr }
 func (m *mockCmd) CombinedOutput() ([]byte, error) {
 	if m.combinedErr != nil && len(m.combinedOutput) == 0 {
 		return nil, m.combinedErr
@@ -72,36 +72,6 @@ func TestBuildImage_Error(t *testing.T) {
 	defer func() { newDockerCmdContext = oldNew }()
 
 	_, err := BuildImage("/tmp", "app")
-	if err == nil || !strings.Contains(err.Error(), "docker build failed") {
-		t.Fatalf("Expected build error, got %v", err)
-	}
-}
-
-func TestBuildImageWithDockerfile_Timeout(t *testing.T) {
-	oldTimeout := buildTimeout
-	buildTimeout = 0
-	defer func() { buildTimeout = oldTimeout }()
-
-	oldNew := newDockerCmdContext
-	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
-		return &mockCmd{ctx: ctx, runErr: context.DeadlineExceeded}
-	}
-	defer func() { newDockerCmdContext = oldNew }()
-
-	_, err := BuildImageWithDockerfile("/tmp", "/tmp/Dockerfile", "app")
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("Expected timeout error, got %v", err)
-	}
-}
-
-func TestBuildImageWithDockerfile_Error(t *testing.T) {
-	oldNew := newDockerCmdContext
-	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
-		return &mockCmd{runErr: errors.New("build failed")}
-	}
-	defer func() { newDockerCmdContext = oldNew }()
-
-	_, err := BuildImageWithDockerfile("/tmp", "/tmp/Dockerfile", "app")
 	if err == nil || !strings.Contains(err.Error(), "docker build failed") {
 		t.Fatalf("Expected build error, got %v", err)
 	}
@@ -726,29 +696,6 @@ func TestRun_Version(t *testing.T) {
 	}
 }
 
-func TestPullImage_HelloWorld(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
-	err := PullImage("hello-world:latest")
-	if err != nil {
-		t.Fatalf("PullImage failed: %v", err)
-	}
-}
-
-func TestListImages_AfterPull(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
-	PullImage("hello-world:latest")
-	images, err := ListImages("hello-world")
-	if err != nil {
-		t.Fatalf("ListImages failed: %v", err)
-	}
-	// hello-world images may or may not show depending on Docker config
-	_ = images
-}
-
 func TestContainerStatus_RunningContainer(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
@@ -885,71 +832,6 @@ func TestBuildImage_SimpleDockerfile(t *testing.T) {
 	}
 
 	_ = RemoveImage(tag)
-}
-
-func TestBuildImageWithDockerfile_CustomPath(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
-
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "custom"), 0755)
-	dfPath := filepath.Join(dir, "custom", "Dockerfile")
-	os.WriteFile(dfPath, []byte("FROM hello-world:latest\n"), 0644)
-
-	tag, err := BuildImageWithDockerfile(dir, dfPath, "qd-test-build2")
-	if err != nil {
-		t.Fatalf("BuildImageWithDockerfile failed: %v", err)
-	}
-	if tag == "" {
-		t.Error("Tag should not be empty")
-	}
-
-	_ = RemoveImage(tag)
-}
-
-func TestTagAndRemoveImage(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
-
-	PullImage("hello-world:latest")
-
-	err := TagImage("hello-world:latest", "qd-test-tag:v1")
-	if err != nil {
-		t.Fatalf("TagImage failed: %v", err)
-	}
-
-	images, _ := ListImages("qd-test-tag")
-	if len(images) == 0 {
-		t.Error("Should find tagged image")
-	}
-
-	err = RemoveImage("qd-test-tag:v1")
-	if err != nil {
-		t.Fatalf("RemoveImage failed: %v", err)
-	}
-}
-
-func TestCleanupOldImages_WithImages(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
-
-	PullImage("hello-world:latest")
-	TagImage("hello-world:latest", "qd-test-cleanup:v1")
-	TagImage("hello-world:latest", "qd-test-cleanup:v2")
-	TagImage("hello-world:latest", "qd-test-cleanup:v3")
-
-	err := CleanupOldImages("qd-test-cleanup", 1)
-	if err != nil {
-		t.Fatalf("CleanupOldImages failed: %v", err)
-	}
-
-	remaining, _ := ListImages("qd-test-cleanup")
-	for _, img := range remaining {
-		_ = RemoveImage(img)
-	}
 }
 
 func TestComposeUpAndDown(t *testing.T) {

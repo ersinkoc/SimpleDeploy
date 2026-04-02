@@ -12,100 +12,82 @@ var generatePassword = state.GeneratePassword
 type DatabaseConfig struct {
 	Type         string
 	Image        string
-	Container    string
-	Port         int
 	Env          map[string]string
 	Volume       string
 	HealthCheck  map[string]interface{}
-	ConnEnvKey   string
 	ConnTemplate string
 }
 
 var databaseDefs = map[string]DatabaseConfig{
 	"mysql": {
-		Type:      "mysql",
-		Image:     "mysql:8",
-		Container: "mysql",
-		Port:      3306,
+		Type:  "mysql",
+		Image: "mysql:8",
 		Env: map[string]string{
 			"MYSQL_ROOT_PASSWORD": "", // generated
 			"MYSQL_DATABASE":      "", // app name
 		},
-		Volume:     "/var/lib/mysql",
+		Volume: "/var/lib/mysql",
 		HealthCheck: map[string]interface{}{
 			"test":     []string{"CMD", "mysqladmin", "ping", "-h", "localhost"},
 			"interval": "10s",
 			"timeout":  "5s",
 			"retries":  5,
 		},
-		ConnEnvKey:   "DATABASE_URL",
 		ConnTemplate: "mysql://root:%s@qd-%s-mysql:3306/%s",
 	},
 	"postgresql": {
-		Type:      "postgresql",
-		Image:     "postgres:16",
-		Container: "postgres",
-		Port:      5432,
+		Type:  "postgresql",
+		Image: "postgres:16",
 		Env: map[string]string{
 			"POSTGRES_PASSWORD": "", // generated
 			"POSTGRES_DB":       "", // app name
 		},
-		Volume:     "/var/lib/postgresql/data",
+		Volume: "/var/lib/postgresql/data",
 		HealthCheck: map[string]interface{}{
 			"test":     []string{"CMD-SHELL", "pg_isready -U postgres"},
 			"interval": "10s",
 			"timeout":  "5s",
 			"retries":  5,
 		},
-		ConnEnvKey:   "DATABASE_URL",
 		ConnTemplate: "postgresql://postgres:%s@qd-%s-postgresql:5432/%s",
 	},
 	"mariadb": {
-		Type:      "mariadb",
-		Image:     "mariadb:11",
-		Container: "mariadb",
-		Port:      3306,
+		Type:  "mariadb",
+		Image: "mariadb:11",
 		Env: map[string]string{
 			"MARIADB_ROOT_PASSWORD": "",
 			"MARIADB_DATABASE":      "",
 		},
-		Volume:     "/var/lib/mysql",
+		Volume: "/var/lib/mysql",
 		HealthCheck: map[string]interface{}{
 			"test":     []string{"CMD", "healthcheck.sh", "--connect"},
 			"interval": "10s",
 			"timeout":  "5s",
 			"retries":  5,
 		},
-		ConnEnvKey:   "DATABASE_URL",
 		ConnTemplate: "mysql://root:%s@qd-%s-mariadb:3306/%s",
 	},
 	"mongodb": {
-		Type:      "mongodb",
-		Image:     "mongo:7",
-		Container: "mongo",
-		Port:      27017,
+		Type:  "mongodb",
+		Image: "mongo:7",
 		Env: map[string]string{
 			"MONGO_INITDB_ROOT_PASSWORD": "",
 		},
-		Volume:     "/data/db",
+		Volume: "/data/db",
 		HealthCheck: map[string]interface{}{
 			"test":     []string{"CMD", "mongosh", "--eval", "db.adminCommand('ping')"},
 			"interval": "10s",
 			"timeout":  "5s",
 			"retries":  5,
 		},
-		ConnEnvKey:   "MONGODB_URI",
 		ConnTemplate: "mongodb://root:%s@qd-%s-mongodb:27017",
 	},
 	"redis": {
-		Type:       "redis",
-		Image:      "redis:7-alpine",
-		Container:  "redis",
-		Port:       6379,
-		Env:        map[string]string{},
-		Volume:     "/data",
-		HealthCheck: nil,
-		ConnEnvKey:  "REDIS_URL",
+		Type:         "redis",
+		Image:        "redis:7-alpine",
+		Env:          map[string]string{},
+		Volume:       "/data",
+		HealthCheck:  nil,
 		ConnTemplate: "redis://qd-%s-redis:6379",
 	},
 }

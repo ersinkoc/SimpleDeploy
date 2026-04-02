@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/buildpack"
-	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	compose "github.com/ersinkoc/SimpleDeploy/internal/compose"
+	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/db"
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 	"github.com/ersinkoc/SimpleDeploy/internal/proxy"
@@ -449,7 +449,10 @@ func TestComposeIntegration(t *testing.T) {
 	cfg := &state.GlobalConfig{Proxy: "traefik"}
 	data := buildComposeData(app, cfg, nil, map[string]string{"GO_ENV": "test"})
 
-	yaml := compose.Generate(data)
+	yaml, err := compose.Generate(data)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
 	if !strings.Contains(yaml, "qd-integration") {
 		t.Error("Generated compose should contain container name")
 	}
@@ -600,8 +603,8 @@ func TestAllDBConfigs(t *testing.T) {
 			if cfg.Image == "" {
 				t.Errorf("Image should not be empty for %q", dbType)
 			}
-			if cfg.Port == 0 {
-				t.Errorf("Port should not be 0 for %q", dbType)
+			if cfg.Volume == "" {
+				t.Errorf("Volume should not be empty for %q", dbType)
 			}
 		})
 	}
@@ -1806,4 +1809,59 @@ func TestRunDeploy_CancelDeploy(t *testing.T) {
 			t.Errorf("Cancelled deploy should not error: %v", err)
 		}
 	})
+}
+
+// TestValidateEnvPath_Security tests that validateEnvPath prevents path traversal attacks.
+func TestValidateEnvPath_Security(t *testing.T) {
+	// Create a temp directory to use as base
+	baseDir := t.TempDir()
+
+	tests := []struct {
+		name       string
+		customPath string
+		wantErr    bool
+	}{
+		{
+			name:       "Valid path within base dir",
+			customPath: filepath.Join(baseDir, "app", ".env"),
+			wantErr:    false,
+		},
+		{
+			name:       "Path traversal with double dots",
+			customPath: filepath.Join(baseDir, "..", "..", "etc", "passwd"),
+			wantErr:    true,
+		},
+		{
+			name:       "Path traversal with double dots in middle",
+			customPath: filepath.Join(baseDir, "apps", "..", "..", "etc", "passwd"),
+			wantErr:    true,
+		},
+		{
+			name:       "Absolute path outside base",
+			customPath: "/etc/passwd",
+			wantErr:    true,
+		},
+		{
+			name:       "Valid nested path",
+			customPath: filepath.Join(baseDir, "apps", "myapp", ".env"),
+			wantErr:    false,
+		},
+		{
+			name:       "Relative path that escapes base",
+			customPath: "../etc/passwd",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEnvPath(tt.customPath, baseDir)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateEnvPath(%q, %q) expected error, got nil", tt.customPath, baseDir)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateEnvPath(%q, %q) expected no error, got: %v", tt.customPath, baseDir, err)
+			}
+		})
+	}
 }

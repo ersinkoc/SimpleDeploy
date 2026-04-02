@@ -34,7 +34,11 @@ func RunStatus() error {
 	if cfg.Proxy == "caddy" {
 		proxyContainer = "qd-caddy"
 	}
-	proxyStatus, _ := docker.ContainerStatus(proxyContainer)
+	proxyStatus, err := docker.ContainerStatus(proxyContainer)
+	if err != nil {
+		wizard.Warn(fmt.Sprintf("Failed to get proxy status: %v", err))
+		proxyStatus = "unknown"
+	}
 	fmt.Printf("  Proxy:       %s (%s)\n", proxyContainer, coloredStatus(proxyStatus))
 	fmt.Println()
 
@@ -46,8 +50,12 @@ func RunStatus() error {
 
 	fmt.Printf("  Applications (%d):\n", len(s.Apps))
 	for name, app := range s.Apps {
-		containerName := fmt.Sprintf("qd-%s", name)
-		status, _ := docker.ContainerStatus(containerName)
+		containerName := docker.ContainerName(name)
+		status, err := docker.ContainerStatus(containerName)
+		if err != nil {
+			wizard.Warn(fmt.Sprintf("Failed to get status for %s: %v", name, err))
+			status = "unknown"
+		}
 		fmt.Printf("    %-20s %s  %s\n", name, coloredStatus(status), app.Domain)
 	}
 
@@ -62,6 +70,8 @@ func coloredStatus(status string) string {
 		return wizard.Red("stopped")
 	case "not found":
 		return wizard.Yellow("not found")
+	case "unknown":
+		return wizard.Yellow("unknown")
 	default:
 		return wizard.Yellow(status)
 	}

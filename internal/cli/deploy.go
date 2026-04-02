@@ -13,6 +13,7 @@ import (
 	compose "github.com/ersinkoc/SimpleDeploy/internal/compose"
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/db"
+	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -139,11 +140,16 @@ func RunDeploy() error {
 	if wizard.Confirm(".env file exists?", false) {
 		customPath := wizard.Ask(".env path", "")
 		if customPath != "" {
-			data, err := osReadFile(customPath)
-			if err != nil {
-				wizard.Warn("Could not read .env file: " + err.Error())
-			} else if err := osWriteFile(envPath, data, 0600); err != nil {
-				wizard.Warn("Failed to write .env: " + err.Error())
+			// Security: Validate path to prevent path traversal
+			if err := validateEnvPath(customPath, appDir); err != nil {
+				wizard.Warn(fmt.Sprintf("Invalid .env path: %v", err))
+			} else {
+				data, err := osReadFile(customPath)
+				if err != nil {
+					wizard.Warn("Could not read .env file: " + err.Error())
+				} else if err := osWriteFile(envPath, data, 0600); err != nil {
+					wizard.Warn("Failed to write .env: " + err.Error())
+				}
 			}
 		}
 	}
@@ -274,7 +280,10 @@ func RunDeploy() error {
 
 	// Generate compose
 	composeData := buildComposeData(app, cfg, dbVolumes, envMap)
-	composeContent := compose.Generate(composeData)
+	composeContent, err := compose.Generate(composeData)
+	if err != nil {
+		return fmt.Errorf("failed to generate compose: %w", err)
+	}
 	if err := composeWriteCompose(appDir, composeContent); err != nil {
 		return fmt.Errorf("failed to write compose: %w", err)
 	}
@@ -293,7 +302,7 @@ func RunDeploy() error {
 	wizard.Success("Containers started")
 
 	// Verify container is actually running
-	containerName := "qd-" + app.Name
+	containerName := docker.ContainerName(app.Name)
 	time.Sleep(2 * time.Second)
 	containerStatus, _ := dockerContainerStatus(containerName)
 	if containerStatus != "running" {
@@ -363,7 +372,6 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 		dbSvc := compose.DBService{
 			Type:       dbType,
 			Image:      dbCfg.Image,
-			Container:  dbCfg.Container,
 			Volume:     dbCfg.Volume,
 			VolumeName: volName,
 			Env:        make(map[string]string),
@@ -436,6 +444,38 @@ func logDeploy(appDir, appName, imageTag string) {
 }
 
 var sanitizeNameRe = regexp.MustCompile(`[^a-z0-9-]`)
+
+// validateEnvPath validates that the custom .env path is within the allowed base directory
+// and does not contain path traversal sequences.
+func validateEnvPath(customPath, baseDir string) error {
+	// Clean the path to resolve any . or .. sequences
+	absPath, err := filepath.Abs(customPath)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	// Get absolute path of base directory
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return fmt.Errorf("invalid base directory: %w", err)
+	}
+
+	// Ensure the path is within the base directory
+	cleanPath := filepath.Clean(absPath)
+	cleanBase := filepath.Clean(absBase)
+
+	// Check for path traversal - path must start with base directory
+	if !strings.HasPrefix(cleanPath+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal detected: path must be within %s", baseDir)
+	}
+
+	// Additional check: ensure path doesn't contain .. after cleaning
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path contains invalid sequence: %s", cleanPath)
+	}
+
+	return nil
+}
 
 // sanitizeDefaultName converts a repo-derived name into a safe default app name.
 func sanitizeDefaultName(name string) string {

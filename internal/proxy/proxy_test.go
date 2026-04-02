@@ -784,3 +784,78 @@ func TestAddCaddyApp_InvalidDomain(t *testing.T) {
 		})
 	}
 }
+
+// TestEscapeCaddyValue_Security tests that escapeCaddyValue properly escapes
+// special characters to prevent Caddyfile injection attacks.
+func TestEscapeCaddyValue_Security(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			input:    `normal value`,
+			expected: `normal value`,
+		},
+		{
+			input:    `value with "quotes"`,
+			expected: `value with \"quotes\"`,
+		},
+		{
+			input:    `value with \ backslash`,
+			expected: `value with \\ backslash`,
+		},
+		{
+			input:    "value with\nnewline",
+			expected: `value with\nnewline`,
+		},
+		{
+			input:    `value with "} malicious {`,
+			expected: `value with \"} malicious {`,
+		},
+	}
+
+	for _, tc := range tests {
+		result := escapeCaddyValue(tc.input)
+		if result != tc.expected {
+			t.Errorf("escapeCaddyValue(%q) = %q, want %q", tc.input, result, tc.expected)
+		}
+	}
+}
+
+// TestAddCaddyApp_HeaderInjection tests that AddCaddyApp properly escapes
+// header values to prevent Caddyfile injection attacks.
+func TestAddCaddyApp_HeaderInjection(t *testing.T) {
+	setupTestProxyDir(t)
+
+	// Create initial Caddyfile
+	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("# Initial Caddyfile\n"), 0644)
+
+	// Try to inject via header value
+	maliciousHeaders := map[string]string{
+		"X-Custom": `value"} malicious_directive "another`,
+	}
+
+	err := AddCaddyApp("testapp", "test.example.com", 3000, maliciousHeaders)
+	if err != nil {
+		t.Fatalf("AddCaddyApp failed: %v", err)
+	}
+
+	// Read the Caddyfile
+	data, err := os.ReadFile(caddyfilePath)
+	if err != nil {
+		t.Fatalf("Failed to read Caddyfile: %v", err)
+	}
+
+	content := string(data)
+
+	// Verify the malicious content was escaped
+	if strings.Contains(content, `"} malicious_directive "another`) {
+		t.Error("Malicious header value was not properly escaped")
+	}
+
+	// Verify the escaped version is present
+	if !strings.Contains(content, `\"} malicious_directive \"another`) {
+		t.Error("Escaped header value not found in Caddyfile")
+	}
+}

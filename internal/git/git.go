@@ -65,30 +65,6 @@ func Pull(repoDir, branch string, token ...string) error {
 	return nil
 }
 
-func GetShortHash(repoDir string) (string, error) {
-	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--short", "HEAD")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get git hash: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func DetectBranch(repoDir string) (string, error) {
-	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to detect branch: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func IsRepo(dir string) bool {
-	gitDir := filepath.Join(dir, ".git")
-	info, err := os.Stat(gitDir)
-	return err == nil && info.IsDir()
-}
-
 // writeAskpassScript creates a temporary script that echoes the token
 // without exposing it in process arguments.
 func writeAskpassScript(token string) (path string, cleanup func(), err error) {

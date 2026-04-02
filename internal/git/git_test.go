@@ -175,36 +175,6 @@ func TestSanitizeOutput_RemovesAllOccurrences(t *testing.T) {
 	}
 }
 
-func TestIsRepo_WithGitDir(t *testing.T) {
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".git"), 0755)
-	if !IsRepo(dir) {
-		t.Error("Should detect .git directory as a repo")
-	}
-}
-
-func TestIsRepo_EmptyDir(t *testing.T) {
-	dir := t.TempDir()
-	if IsRepo(dir) {
-		t.Error("Empty dir should not be detected as repo")
-	}
-}
-
-func TestIsRepo_NonexistentDir(t *testing.T) {
-	if IsRepo("/nonexistent/path/xyz") {
-		t.Error("Nonexistent dir should not be detected as repo")
-	}
-}
-
-func TestIsRepo_GitFile(t *testing.T) {
-	dir := t.TempDir()
-	// Write .git file (used in git worktrees)
-	os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /some/path"), 0644)
-	if IsRepo(dir) {
-		t.Error(".git file (not dir) should not be detected as repo by current implementation")
-	}
-}
-
 func TestWriteAskpassScript(t *testing.T) {
 	path, cleanup, err := writeAskpassScript("mytoken123")
 	if err != nil {
@@ -338,56 +308,6 @@ func TestPull_LocalRepo(t *testing.T) {
 	}
 }
 
-func TestGetShortHash(t *testing.T) {
-	repoDir := t.TempDir()
-	runGitCmd(t, repoDir, "init")
-	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
-	runGitCmd(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
-	runGitCmd(t, repoDir, "add", ".")
-	runGitCmd(t, repoDir, "commit", "-m", "initial")
-
-	hash, err := GetShortHash(repoDir)
-	if err != nil {
-		t.Fatalf("GetShortHash failed: %v", err)
-	}
-	if len(hash) < 7 {
-		t.Errorf("Hash too short: %s", hash)
-	}
-}
-
-func TestDetectBranch(t *testing.T) {
-	repoDir := t.TempDir()
-	runGitCmd(t, repoDir, "init")
-	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
-	runGitCmd(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
-	runGitCmd(t, repoDir, "add", ".")
-	runGitCmd(t, repoDir, "commit", "-m", "initial")
-
-	branch, err := DetectBranch(repoDir)
-	if err != nil {
-		t.Fatalf("DetectBranch failed: %v", err)
-	}
-	if branch == "" {
-		t.Error("Branch should not be empty")
-	}
-}
-
-func TestGetShortHash_NotRepo(t *testing.T) {
-	_, err := GetShortHash(t.TempDir())
-	if err == nil {
-		t.Error("Should fail for non-repo directory")
-	}
-}
-
-func TestDetectBranch_NotRepo(t *testing.T) {
-	_, err := DetectBranch(t.TempDir())
-	if err == nil {
-		t.Error("Should fail for non-repo directory")
-	}
-}
-
 func TestPull_NotRepo(t *testing.T) {
 	err := Pull(t.TempDir(), "main")
 	if err == nil {
@@ -440,22 +360,6 @@ func TestClone_WrongBranch(t *testing.T) {
 	err := Clone(repoDir, "nonexistent-branch-xyz", destDir, "")
 	if err == nil {
 		t.Error("Should fail for nonexistent branch")
-	}
-}
-
-func TestGetShortHash_Consistent(t *testing.T) {
-	repoDir := t.TempDir()
-	runGitCmd(t, repoDir, "init")
-	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
-	runGitCmd(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
-	runGitCmd(t, repoDir, "add", ".")
-	runGitCmd(t, repoDir, "commit", "-m", "initial")
-
-	hash1, _ := GetShortHash(repoDir)
-	hash2, _ := GetShortHash(repoDir)
-	if hash1 != hash2 {
-		t.Errorf("Hashes should be consistent: %s vs %s", hash1, hash2)
 	}
 }
 

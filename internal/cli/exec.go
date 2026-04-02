@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+
+	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 )
 
 func RunExec(args []string) error {
@@ -18,6 +20,6 @@ func RunExec(args []string) error {
 		return fmt.Errorf("app %q not found", appName)
 	}
 
-	containerName := "qd-" + appName
+	containerName := docker.ContainerName(appName)
 	return dockerExecContainer(containerName, args[1:]...)
 }

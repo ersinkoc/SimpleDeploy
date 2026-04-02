@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,14 +17,13 @@ import (
 )
 
 var (
-	validAppNameRe     = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`)
 	cleanupInterval    = time.Minute
 	httpListenAndServe = func(srv *http.Server) error { return srv.ListenAndServe() }
 	deployTimeout      = 30 * time.Minute
 )
 
 func isValidAppName(name string) bool {
-	return validAppNameRe.MatchString(name)
+	return state.AppNameRegex.MatchString(name)
 }
 
 // rateLimiter provides a simple per-IP token bucket rate limiter.
@@ -34,6 +32,7 @@ type rateLimiter struct {
 	visitors map[string]*visitor
 	limit    int
 	window   time.Duration
+	stopChan chan struct{}
 }
 
 type visitor struct {
@@ -46,21 +45,36 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 		visitors: make(map[string]*visitor),
 		limit:    limit,
 		window:   window,
+		stopChan: make(chan struct{}),
 	}
 	// Cleanup stale entries every minute
 	go func() {
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
 		for {
-			time.Sleep(cleanupInterval)
-			rl.mu.Lock()
-			for ip, v := range rl.visitors {
-				if time.Since(v.lastSeen) > rl.window {
-					delete(rl.visitors, ip)
-				}
+			select {
+			case <-ticker.C:
+				rl.cleanup()
+			case <-rl.stopChan:
+				return
 			}
-			rl.mu.Unlock()
 		}
 	}()
 	return rl
+}
+
+func (rl *rateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for ip, v := range rl.visitors {
+		if time.Since(v.lastSeen) > rl.window {
+			delete(rl.visitors, ip)
+		}
+	}
+}
+
+func (rl *rateLimiter) stop() {
+	close(rl.stopChan)
 }
 
 func (rl *rateLimiter) allow(ip string) bool {
@@ -122,6 +136,10 @@ func (s *Server) Start() error {
 	go func() {
 		<-stop
 		log.Println("Shutting down webhook server...")
+
+		// Stop the rate limiter cleanup goroutine
+		s.limiter.stop()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 		defer cancel()
 		srv.Shutdown(ctx)
@@ -233,24 +251,33 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Deploy already in progress for %s, skipping", appName)
 				return
 			}
+			// Mark deploy in progress
 			s.deployLocks[appName] = true
 			s.deployMu.Unlock()
 
 			log.Printf("Webhook triggered deploy for %s", appName)
 
-			// Safety: release lock after 30 min even if deploy hangs
-			timer := time.AfterFunc(deployTimeout, func() {
-				s.deployMu.Lock()
-				delete(s.deployLocks, appName)
-				s.deployMu.Unlock()
-				log.Printf("Deploy for %s timed out after 30 minutes, releasing lock", appName)
-			})
+			// Create a context with timeout for the deploy
+			ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
+			defer cancel()
 
-			if err := s.deploy(appName); err != nil {
-				log.Printf("Deploy failed for %s: %v", appName, err)
+			// Run deploy in a goroutine so we can handle timeout
+			done := make(chan error, 1)
+			go func() {
+				done <- s.deploy(appName)
+			}()
+
+			// Wait for deploy to complete or timeout
+			select {
+			case err := <-done:
+				if err != nil {
+					log.Printf("Deploy failed for %s: %v", appName, err)
+				}
+			case <-ctx.Done():
+				log.Printf("Deploy for %s timed out after 30 minutes", appName)
 			}
-			timer.Stop()
 
+			// Release the lock
 			s.deployMu.Lock()
 			delete(s.deployLocks, appName)
 			s.deployMu.Unlock()

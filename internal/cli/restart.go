@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
@@ -16,7 +17,7 @@ func RunRestart(args []string) error {
 		return fmt.Errorf("app %q not found", appName)
 	}
 
-	containerName := "qd-" + appName
+	containerName := docker.ContainerName(appName)
 	wizard.Info(fmt.Sprintf("Restarting %s...", appName))
 	if err := dockerRestartContainer(containerName); err != nil {
 		return fmt.Errorf("failed to restart %s: %w", appName, err)

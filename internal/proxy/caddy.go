@@ -72,6 +72,20 @@ func SetupCaddy(acmeEmail string) error {
 
 var safeDomainRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,}$`)
 
+// escapeCaddyValue escapes a value for safe use in a Caddyfile.
+// It prevents Caddyfile injection attacks by escaping special characters.
+func escapeCaddyValue(s string) string {
+	// Escape backslashes first
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	// Escape double quotes
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	// Escape newlines
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	// Escape carriage returns
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	return s
+}
+
 func AddCaddyApp(appName, domain string, port int, headers map[string]string) error {
 	if !safeDomainRe.MatchString(domain) {
 		return fmt.Errorf("invalid domain: %q", domain)
@@ -88,7 +102,9 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 	b.WriteString(fmt.Sprintf("\n%s {\n", domain))
 	b.WriteString(fmt.Sprintf("    reverse_proxy qd-%s:%d\n", appName, port))
 	for key, val := range headers {
-		b.WriteString(fmt.Sprintf("    header %s \"%s\"\n", key, val))
+		// Escape the value to prevent Caddyfile injection
+		escapedVal := escapeCaddyValue(val)
+		b.WriteString(fmt.Sprintf("    header %s \"%s\"\n", key, escapedVal))
 	}
 	b.WriteString("}\n")
 

@@ -58,42 +58,6 @@ func TestVerifyGitHubSignature_WrongSecret(t *testing.T) {
 	}
 }
 
-func TestParseGitHubEvent(t *testing.T) {
-	body := `{"ref":"refs/heads/develop","after":"abc123"}`
-	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "push")
-
-	event, branch, err := ParseGitHubEvent(req)
-	if err != nil {
-		t.Fatalf("ParseGitHubEvent failed: %v", err)
-	}
-	if event != "push" {
-		t.Errorf("Event = %q, want 'push'", event)
-	}
-	if branch != "develop" {
-		t.Errorf("Branch = %q, want 'develop'", branch)
-	}
-}
-
-func TestParseGitHubEvent_NoEventHeader(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader("{}"))
-	_, _, err := ParseGitHubEvent(req)
-	if err == nil {
-		t.Error("Should fail without X-GitHub-Event header")
-	}
-}
-
-func TestParseGitHubEvent_TagPush(t *testing.T) {
-	body := `{"ref":"refs/tags/v1.0.0"}`
-	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(body))
-	req.Header.Set("X-GitHub-Event", "push")
-
-	_, branch, _ := ParseGitHubEvent(req)
-	if branch != "" {
-		t.Errorf("Tag push should have empty branch, got %q", branch)
-	}
-}
-
 func TestExtractRefFromPayload(t *testing.T) {
 	tests := []struct {
 		body string

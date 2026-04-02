@@ -11,14 +11,13 @@ func TestGetDatabaseConfig(t *testing.T) {
 		dbType string
 		found  bool
 		image  string
-		port   int
 	}{
-		{"mysql", true, "mysql:8", 3306},
-		{"postgresql", true, "postgres:16", 5432},
-		{"mariadb", true, "mariadb:11", 3306},
-		{"mongodb", true, "mongo:7", 27017},
-		{"redis", true, "redis:7-alpine", 6379},
-		{"unknown", false, "", 0},
+		{"mysql", true, "mysql:8"},
+		{"postgresql", true, "postgres:16"},
+		{"mariadb", true, "mariadb:11"},
+		{"mongodb", true, "mongo:7"},
+		{"redis", true, "redis:7-alpine"},
+		{"unknown", false, ""},
 	}
 
 	for _, tt := range tests {
@@ -30,9 +29,6 @@ func TestGetDatabaseConfig(t *testing.T) {
 			if ok {
 				if cfg.Image != tt.image {
 					t.Errorf("Image = %q, want %q", cfg.Image, tt.image)
-				}
-				if cfg.Port != tt.port {
-					t.Errorf("Port = %d, want %d", cfg.Port, tt.port)
 				}
 			}
 		})
@@ -232,33 +228,5 @@ func TestProvisionDatabases_MultipleSQL_FirstGetsDatabaseURL(t *testing.T) {
 	}
 	if !strings.Contains(envVars["MARIADB_URL"], "qd-app-mariadb") {
 		t.Errorf("MARIADB_URL should point to mariadb host, got %q", envVars["MARIADB_URL"])
-	}
-}
-
-func TestGetDatabaseConfig_ContainerName(t *testing.T) {
-	tests := []struct {
-		dbType    string
-		container string
-		volume    string
-	}{
-		{"mysql", "mysql", "/var/lib/mysql"},
-		{"postgresql", "postgres", "/var/lib/postgresql/data"},
-		{"redis", "redis", "/data"},
-		{"mongodb", "mongo", "/data/db"},
-		{"mariadb", "mariadb", "/var/lib/mysql"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.dbType, func(t *testing.T) {
-			cfg, ok := GetDatabaseConfig(tt.dbType)
-			if !ok {
-				t.Fatalf("GetDatabaseConfig(%q) not found", tt.dbType)
-			}
-			if cfg.Container != tt.container {
-				t.Errorf("Container = %q, want %q", cfg.Container, tt.container)
-			}
-			if cfg.Volume != tt.volume {
-				t.Errorf("Volume = %q, want %q", cfg.Volume, tt.volume)
-			}
-		})
 	}
 }

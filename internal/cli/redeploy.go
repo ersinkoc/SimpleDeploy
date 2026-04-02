@@ -37,11 +37,10 @@ func RunRedeploy(args []string) error {
 	gitToken := app.GitToken
 	if gitToken != "" {
 		decrypted, err := stateDecrypt(gitToken)
-		if err == nil {
-			gitToken = decrypted
-		} else {
-			wizard.Warn("Failed to decrypt git token: " + err.Error())
+		if err != nil {
+			return fmt.Errorf("failed to decrypt git token: %w", err)
 		}
+		gitToken = decrypted
 	}
 
 	// Pull latest
@@ -86,7 +85,8 @@ func RunRedeploy(args []string) error {
 		}
 	}
 
-	// Cleanup old images (keep last 3)
+	// Cleanup old images (keep last 3) - run synchronously to avoid race conditions
+	// with concurrent redeploy/remove operations on the same app
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {

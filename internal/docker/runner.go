@@ -97,9 +97,20 @@ func ContainerStatus(containerName string) (string, error) {
 	defer cancel()
 
 	cmd := newDockerCmdContext(ctx, "docker", "inspect", "-f", "{{.State.Status}}", containerName)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "not found", nil
+		// Check if container doesn't exist vs other errors
+		// Docker returns various error messages for non-existent containers:
+		// - "no such container"
+		// - "no such object"
+		// - "not found"
+		outStr := strings.ToLower(string(output))
+		if strings.Contains(outStr, "no such") ||
+			strings.Contains(outStr, "not found") {
+			return "not found", nil
+		}
+		// Return actual error for other cases
+		return "", fmt.Errorf("failed to get container status: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
 }

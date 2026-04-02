@@ -6,8 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -31,24 +29,6 @@ func VerifyGitHubSignature(body []byte, signature string, secret string) bool {
 	expectedMAC := mac.Sum(nil)
 
 	return hmac.Equal(sig, expectedMAC)
-}
-
-func ParseGitHubEvent(r *http.Request) (event string, branch string, err error) {
-	event = r.Header.Get("X-GitHub-Event")
-	if event == "" {
-		return "", "", fmt.Errorf("missing X-GitHub-Event header")
-	}
-
-	// Read body to extract ref from payload
-	body, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(strings.NewReader(string(body)))
-
-	ref := extractRefFromPayload(string(body))
-	if strings.HasPrefix(ref, "refs/heads/") {
-		branch = strings.TrimPrefix(ref, "refs/heads/")
-	}
-
-	return event, branch, nil
 }
 
 func extractRefFromPayload(body string) string {
