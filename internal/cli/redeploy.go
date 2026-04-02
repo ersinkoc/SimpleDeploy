@@ -38,9 +38,11 @@ func RunRedeploy(args []string) error {
 	if gitToken != "" {
 		decrypted, err := stateDecrypt(gitToken)
 		if err != nil {
-			return fmt.Errorf("failed to decrypt git token: %w", err)
+			wizard.Warn("Failed to decrypt git token: " + err.Error())
+			gitToken = ""
+		} else {
+			gitToken = decrypted
 		}
-		gitToken = decrypted
 	}
 
 	// Pull latest

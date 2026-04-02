@@ -702,19 +702,19 @@ func TestLockStateFile_StaleLock(t *testing.T) {
 	defer unlock()
 }
 
-// TestProcessExists tests the processExists function.
-func TestProcessExists(t *testing.T) {
+func TestLockStateFile_StaleByAge(t *testing.T) {
 	tempStateDir(t)
 
-	// Create a lock file for current process
 	lockPath := getStatePath() + ".lock"
-	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0600)
+	os.WriteFile(lockPath, []byte("99999\n"), 0600)
 
-	// Current process should exist
-	if !processExists(os.Getpid()) {
-		t.Error("processExists should return true for current process")
+	// Set mtime to 10 seconds ago so it's considered stale
+	oldTime := time.Now().Add(-10 * time.Second)
+	os.Chtimes(lockPath, oldTime, oldTime)
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		t.Fatalf("Failed to acquire lock with stale lock file: %v", err)
 	}
-
-	// Clean up
-	os.Remove(lockPath)
+	unlock()
 }

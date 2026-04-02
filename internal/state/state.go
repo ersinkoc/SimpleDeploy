@@ -16,12 +16,12 @@ type stateFile interface {
 }
 
 var (
-	osUserHomeDir    = os.UserHomeDir
-	osMkdirAll       = os.MkdirAll
-	osOpenFile       = func(name string, flag int, perm os.FileMode) (stateFile, error) { return os.OpenFile(name, flag, perm) }
-	osRename         = os.Rename
-	osRemove         = os.Remove
-	osReadFile       = os.ReadFile
+	osUserHomeDir     = os.UserHomeDir
+	osMkdirAll        = os.MkdirAll
+	osOpenFile        = func(name string, flag int, perm os.FileMode) (stateFile, error) { return os.OpenFile(name, flag, perm) }
+	osRename          = os.Rename
+	osRemove          = os.Remove
+	osReadFile        = os.ReadFile
 	jsonMarshalIndent = json.MarshalIndent
 )
 
@@ -68,12 +68,9 @@ var (
 func lockStateFile() (unlock func(), err error) {
 	lockPath := getStatePath() + ".lock"
 
-	// Try to create lock file atomically
-	// If it already exists, another process has the lock
 	for retries := 0; retries < 100; retries++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
-			// Lock acquired
 			f.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
 			f.Close()
 			return func() {
@@ -81,40 +78,17 @@ func lockStateFile() (unlock func(), err error) {
 			}, nil
 		}
 
-		// Lock file exists, check if it's stale (process no longer exists)
-		if data, err := os.ReadFile(lockPath); err == nil {
-			var pid int
-			fmt.Sscanf(string(data), "%d", &pid)
-			if pid > 0 {
-				// Check if process exists (Unix: kill -0, Windows: OpenProcess)
-				if !processExists(pid) {
-					// Stale lock, remove it
-					os.Remove(lockPath)
-					continue
-				}
-			}
+		// Lock file exists, check if stale based on file age
+		info, statErr := os.Stat(lockPath)
+		if statErr == nil && time.Since(info.ModTime()) > 5*time.Second {
+			os.Remove(lockPath)
+			continue
 		}
 
-		// Wait a bit and retry
 		time.Sleep(10 * time.Millisecond)
 	}
 
 	return nil, fmt.Errorf("could not acquire state lock after 100 retries")
-}
-
-// processExists checks if a process with the given PID exists.
-// This is a cross-platform implementation.
-func processExists(pid int) bool {
-	// On Unix: syscall.Kill(pid, 0) == nil
-	// On Windows: OpenProcess succeeds
-	// For simplicity, we assume the lock is valid if we can read the file
-	// and it was modified recently (within 5 seconds)
-	lockPath := getStatePath() + ".lock"
-	info, err := os.Stat(lockPath)
-	if err != nil {
-		return false
-	}
-	return time.Since(info.ModTime()) < 5*time.Second
 }
 
 func InitState(baseDir string) {
@@ -136,13 +110,6 @@ func getStatePath() string {
 func Load() (*State, error) {
 	mu.Lock()
 	defer mu.Unlock()
-
-	// Acquire file-level lock for cross-process safety
-	unlock, err := lockStateFile()
-	if err != nil {
-		return nil, fmt.Errorf("failed to lock state: %w", err)
-	}
-	defer unlock()
 
 	path := getStatePath()
 	data, err := osReadFile(path)
