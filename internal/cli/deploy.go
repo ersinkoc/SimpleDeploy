@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -260,8 +261,13 @@ func RunDeploy() error {
 
 	// Write .env with restricted permissions
 	var envLines []string
-	for k, v := range envMap {
-		envLines = append(envLines, fmt.Sprintf("%s=%s", k, v))
+	keys := make([]string, 0, len(envMap))
+	for k := range envMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		envLines = append(envLines, fmt.Sprintf("%s=%s", k, envMap[k]))
 	}
 	if err := osWriteFile(envPath, []byte(strings.Join(envLines, "\n")), 0600); err != nil {
 		return fmt.Errorf("failed to write .env: %w", err)

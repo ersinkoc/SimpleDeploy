@@ -164,7 +164,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	ip := strings.SplitN(r.RemoteAddr, ":", 2)[0]
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx > 0 {
+		ip = ip[:idx]
+	}
 	if !s.limiter.allow(ip) {
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
@@ -274,7 +277,9 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 					log.Printf("Deploy failed for %s: %v", appName, err)
 				}
 			case <-ctx.Done():
-				log.Printf("Deploy for %s timed out after 30 minutes", appName)
+				log.Printf("Deploy for %s timed out after %v, waiting for deploy to finish", appName, deployTimeout)
+				<-done
+				log.Printf("Timed-out deploy for %s completed", appName)
 			}
 
 			// Release the lock

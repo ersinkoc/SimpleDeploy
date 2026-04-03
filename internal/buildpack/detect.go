@@ -14,13 +14,13 @@ type AppType struct {
 }
 
 const (
-	TypeNode    = "node"
-	TypeGo      = "go"
-	TypePHP     = "php"
-	TypePython  = "python"
-	TypeRuby    = "ruby"
-	TypeStatic  = "static"
-	TypeDocker  = "dockerfile"
+	TypeNode   = "node"
+	TypeGo     = "go"
+	TypePHP    = "php"
+	TypePython = "python"
+	TypeRuby   = "ruby"
+	TypeStatic = "static"
+	TypeDocker = "dockerfile"
 )
 
 func Detect(repoDir string) *AppType {
@@ -71,7 +71,6 @@ func Detect(repoDir string) *AppType {
 }
 
 func detectNodePort(repoDir string) int {
-	// Read package.json for start script hints
 	data, err := os.ReadFile(filepath.Join(repoDir, "package.json"))
 	if err != nil {
 		return 3000
@@ -81,9 +80,6 @@ func detectNodePort(repoDir string) int {
 		return 3000
 	}
 	if strings.Contains(content, `"nuxt"`) {
-		return 3000
-	}
-	if strings.Contains(content, `"port"`) {
 		return 3000
 	}
 	return 3000
@@ -134,7 +130,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --production
 COPY . .
-RUN npm run build 2>/dev/null || true
+RUN npm run build
 
 FROM node:22-alpine
 WORKDIR /app

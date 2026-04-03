@@ -24,9 +24,9 @@ type execWrapper struct {
 	*exec.Cmd
 }
 
-func (e *execWrapper) SetDir(dir string)       { e.Dir = dir }
-func (e *execWrapper) SetStdout(w io.Writer)   { e.Stdout = w }
-func (e *execWrapper) SetStderr(w io.Writer)   { e.Stderr = w }
+func (e *execWrapper) SetDir(dir string)     { e.Dir = dir }
+func (e *execWrapper) SetStdout(w io.Writer) { e.Stdout = w }
+func (e *execWrapper) SetStderr(w io.Writer) { e.Stderr = w }
 
 var (
 	osMkdirAll          = os.MkdirAll
@@ -121,21 +121,22 @@ func RemoveCaddyApp(domain string) error {
 	lines := strings.Split(string(data), "\n")
 	var result []string
 	skip := false
+	depth := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// Match domain block start: "domain {" with any whitespace
 		if !skip && (trimmed == domain+" {" || trimmed == domain+"{") {
 			skip = true
+			depth = 1
 			continue
 		}
-		// Match closing brace at column 0 (top-level block end)
-		if skip && trimmed == "}" {
-			skip = false
+		if skip {
+			depth += strings.Count(line, "{") - strings.Count(line, "}")
+			if depth <= 0 {
+				skip = false
+			}
 			continue
 		}
-		if !skip {
-			result = append(result, line)
-		}
+		result = append(result, line)
 	}
 
 	return os.WriteFile(caddyfilePath, []byte(strings.Join(result, "\n")), 0644)

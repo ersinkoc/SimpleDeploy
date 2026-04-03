@@ -80,7 +80,7 @@ var databaseDefs = map[string]DatabaseConfig{
 			"timeout":  "5s",
 			"retries":  5,
 		},
-		ConnTemplate: "mongodb://root:%s@qd-%s-mongodb:27017",
+		ConnTemplate: "mongodb://root:%s@qd-%s-mongodb:27017/%s",
 	},
 	"redis": {
 		Type:         "redis",

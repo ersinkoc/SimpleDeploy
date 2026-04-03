@@ -690,8 +690,8 @@ func TestLockStateFile_StaleLock(t *testing.T) {
 	lockPath := getStatePath() + ".lock"
 	os.WriteFile(lockPath, []byte("99999\n"), 0600)
 
-	// Set modification time to 10 seconds ago (older than 5 second threshold)
-	oldTime := time.Now().Add(-10 * time.Second)
+	// Set modification time to 60 seconds ago (older than 30 second threshold)
+	oldTime := time.Now().Add(-60 * time.Second)
 	os.Chtimes(lockPath, oldTime, oldTime)
 
 	// Try to acquire lock - should succeed after detecting stale lock
@@ -708,8 +708,8 @@ func TestLockStateFile_StaleByAge(t *testing.T) {
 	lockPath := getStatePath() + ".lock"
 	os.WriteFile(lockPath, []byte("99999\n"), 0600)
 
-	// Set mtime to 10 seconds ago so it's considered stale
-	oldTime := time.Now().Add(-10 * time.Second)
+	// Set mtime to 60 seconds ago so it's considered stale
+	oldTime := time.Now().Add(-60 * time.Second)
 	os.Chtimes(lockPath, oldTime, oldTime)
 
 	unlock, err := lockStateFile()

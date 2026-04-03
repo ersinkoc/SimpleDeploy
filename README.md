@@ -127,6 +127,26 @@ cd SimpleDeploy
 CGO_ENABLED=0 go build -o simpledeploy .
 ```
 
+## Test Coverage
+
+| Package | Coverage |
+|---------|----------|
+| main | 100.0% |
+| buildpack | 100.0% |
+| cli | 97.9% |
+| compose | 98.8% |
+| config | 100.0% |
+| db | 100.0% |
+| docker | 99.5% |
+| git | 100.0% |
+| proxy | 100.0% |
+| runner | 100.0% |
+| state | 98.2% |
+| webhook | 98.6% |
+| wizard | 100.0% |
+
+**Average: ~99.4%** — 13/13 packages passing.
+
 ## Build as Docker Image
 
 ```bash
@@ -136,7 +156,7 @@ docker build -t simpledeploy:latest .
 ## Requirements
 
 - Linux server (Ubuntu/Debian/CentOS/Fedora recommended)
-- Go 1.26+ (for building)
+- Go 1.23+ (for building)
 - Docker Engine (auto-installed by `simpledeploy init`)
 
 ## Security

@@ -7,7 +7,7 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
-const version = "0.0.6"
+const version = "0.0.7"
 
 func PrintUsage() {
 	fmt.Printf("SimpleDeploy v%s — Single-Binary PaaS CLI\n", version)

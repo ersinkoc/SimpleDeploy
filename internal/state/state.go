@@ -80,7 +80,7 @@ func lockStateFile() (unlock func(), err error) {
 
 		// Lock file exists, check if stale based on file age
 		info, statErr := os.Stat(lockPath)
-		if statErr == nil && time.Since(info.ModTime()) > 5*time.Second {
+		if statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
 			os.Remove(lockPath)
 			continue
 		}
@@ -196,7 +196,24 @@ func GetApp(name string) (*AppConfig, error) {
 	if !ok {
 		return nil, fmt.Errorf("application '%s' not found", name)
 	}
-	return app, nil
+	cp := *app
+	if cp.Headers != nil {
+		cp.Headers = make(map[string]string, len(app.Headers))
+		for k, v := range app.Headers {
+			cp.Headers[k] = v
+		}
+	}
+	if cp.DBCredentials != nil {
+		cp.DBCredentials = make(map[string]string, len(app.DBCredentials))
+		for k, v := range app.DBCredentials {
+			cp.DBCredentials[k] = v
+		}
+	}
+	if cp.Databases != nil {
+		cp.Databases = make([]string, len(app.Databases))
+		copy(cp.Databases, app.Databases)
+	}
+	return &cp, nil
 }
 
 func SaveApp(app *AppConfig) error {

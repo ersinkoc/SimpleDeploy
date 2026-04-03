@@ -100,11 +100,12 @@ func Decrypt(encoded string) (string, error) {
 }
 
 func GenerateSecret(prefix string, length int) (string, error) {
-	bytes := make([]byte, length)
-	if _, err := randRead(bytes); err != nil {
+	byteLen := (length + 1) / 2
+	b := make([]byte, byteLen)
+	if _, err := randRead(b); err != nil {
 		return "", fmt.Errorf("failed to generate secret: %w", err)
 	}
-	return prefix + hex.EncodeToString(bytes)[:length], nil
+	return prefix + hex.EncodeToString(b)[:length], nil
 }
 
 func GeneratePassword(length int) (string, error) {

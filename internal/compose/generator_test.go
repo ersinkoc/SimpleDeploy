@@ -326,14 +326,14 @@ func TestGenerate_MultipleEnvVars(t *testing.T) {
 
 func TestGenerate_CaddyWithHeaders(t *testing.T) {
 	data := &ComposeData{
-		AppName:   "caddyapp2",
-		Image:     "caddyapp2:v1",
-		Port:      8080,
-		Domain:    "caddyapp2.example.com",
-		ProxyType: "caddy",
-		Headers:   map[string]string{"X-Custom": "value"},
-		Repo:      "https://github.com/test/app.git",
-		Branch:    "main",
+		AppName:     "caddyapp2",
+		Image:       "caddyapp2:v1",
+		Port:        8080,
+		Domain:      "caddyapp2.example.com",
+		ProxyType:   "caddy",
+		Headers:     map[string]string{"X-Custom": "value"},
+		Repo:        "https://github.com/test/app.git",
+		Branch:      "main",
 		GeneratedAt: "2024-01-15T10:30:00Z",
 	}
 
@@ -448,50 +448,59 @@ func TestNewComposeData_SetsFields(t *testing.T) {
 // that could be used for YAML injection attacks.
 func TestYAMLQuote_Security(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr bool
+		name     string
+		input    string
+		wantErr  bool
+		contains string
 	}{
 		{
-			name:    "Normal value",
-			input:   "hello world",
-			wantErr: false,
+			name:     "Normal value",
+			input:    "hello world",
+			contains: `"hello world"`,
 		},
 		{
-			name:    "Value with interpolation",
-			input:   "${ENV_VAR}",
-			wantErr: true,
+			name:     "Value with interpolation",
+			input:    "${ENV_VAR}",
+			contains: `"${ENV_VAR}"`,
 		},
 		{
-			name:    "Value with comment",
-			input:   "value # comment",
-			wantErr: true,
+			name:     "Value with comment",
+			input:    "value # comment",
+			contains: `"value # comment"`,
 		},
 		{
-			name:    "Value starting with dash",
-			input:   "- malicious",
-			wantErr: true,
+			name:     "Value starting with dash",
+			input:    "- malicious",
+			contains: `"- malicious"`,
 		},
 		{
-			name:    "Value with double quotes",
-			input:   `value "quoted"`,
-			wantErr: false, // Should escape, not error
+			name:     "Value with double quotes",
+			input:    `value "quoted"`,
+			contains: `"value \"quoted\""`,
 		},
 		{
-			name:    "Backdoor attempt",
-			input:   "${`whoami`}",
-			wantErr: true,
+			name:     "Value with backslash",
+			input:    `path\to\file`,
+			contains: `"path\\to\\file"`,
+		},
+		{
+			name:     "Value with newline",
+			input:    "line1\nline2",
+			contains: `"line1\nline2"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := yamlQuote(tt.input)
+			result, err := yamlQuote(tt.input)
 			if tt.wantErr && err == nil {
 				t.Errorf("yamlQuote(%q) expected error, got nil", tt.input)
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("yamlQuote(%q) expected no error, got: %v", tt.input, err)
+			}
+			if !tt.wantErr && result != tt.contains {
+				t.Errorf("yamlQuote(%q) = %q, want %q", tt.input, result, tt.contains)
 			}
 		})
 	}
@@ -514,10 +523,7 @@ func TestGenerate_YAMLInjectionProtection(t *testing.T) {
 	}
 
 	_, err := Generate(data)
-	if err == nil {
-		t.Error("Generate should reject environment variables with YAML injection sequences")
-	}
-	if !strings.Contains(err.Error(), "YAML interpolation") {
-		t.Errorf("Error should mention YAML interpolation, got: %v", err)
+	if err != nil {
+		t.Errorf("Generate should escape YAML injection sequences, not reject: %v", err)
 	}
 }

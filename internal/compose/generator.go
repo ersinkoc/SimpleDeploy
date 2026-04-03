@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,23 +44,12 @@ type HealthCheckData struct {
 	Retries  int
 }
 
+var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // yamlQuote returns a YAML-safe double-quoted string.
 // It escapes special characters and rejects potentially dangerous sequences
 // that could be used for YAML injection attacks.
 func yamlQuote(s string) (string, error) {
-	// Reject interpolation sequences that could execute arbitrary code
-	if strings.Contains(s, "${") {
-		return "", fmt.Errorf("YAML interpolation sequence '${' not allowed in value")
-	}
-	// Reject comment sequences
-	if strings.Contains(s, "#") {
-		return "", fmt.Errorf("comment character '#' not allowed in value")
-	}
-	// Reject YAML special characters at start that could break structure
-	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
-		return "", fmt.Errorf("YAML special character at start not allowed")
-	}
-
 	escaped := strings.NewReplacer(
 		`\`, `\\`,
 		`"`, `\"`,
@@ -95,6 +85,9 @@ func Generate(data *ComposeData) (string, error) {
 	if len(data.Environment) > 0 {
 		b.WriteString("    environment:\n")
 		for key, val := range data.Environment {
+			if !envKeyRe.MatchString(key) {
+				return "", fmt.Errorf("invalid environment variable key %q: must match [A-Za-z_][A-Za-z0-9_]*", key)
+			}
 			quoted, err := yamlQuote(val)
 			if err != nil {
 				return "", fmt.Errorf("invalid environment variable %s: %w", key, err)
@@ -135,8 +128,16 @@ func Generate(data *ComposeData) (string, error) {
 	// SimpleDeploy metadata labels (always present)
 	b.WriteString("      - \"simpledeploy.managed=true\"\n")
 	b.WriteString(fmt.Sprintf("      - \"simpledeploy.app=%s\"\n", data.AppName))
-	b.WriteString(fmt.Sprintf("      - \"simpledeploy.repo=%s\"\n", data.Repo))
-	b.WriteString(fmt.Sprintf("      - \"simpledeploy.branch=%s\"\n", data.Branch))
+	quotedRepo, err := yamlQuote(data.Repo)
+	if err != nil {
+		return "", fmt.Errorf("invalid repo URL: %w", err)
+	}
+	b.WriteString(fmt.Sprintf("      - \"simpledeploy.repo=%s\"\n", quotedRepo[1:len(quotedRepo)-1]))
+	quotedBranch, err := yamlQuote(data.Branch)
+	if err != nil {
+		return "", fmt.Errorf("invalid branch name: %w", err)
+	}
+	b.WriteString(fmt.Sprintf("      - \"simpledeploy.branch=%s\"\n", quotedBranch[1:len(quotedBranch)-1]))
 
 	// Database services
 	for _, db := range data.Databases {

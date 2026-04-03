@@ -13,7 +13,8 @@ func RunRestart(args []string) error {
 		return err
 	}
 
-	if _, err := stateGetApp(appName); err != nil {
+	app, err := stateGetApp(appName)
+	if err != nil {
 		return fmt.Errorf("app %q not found", appName)
 	}
 
@@ -24,10 +25,6 @@ func RunRestart(args []string) error {
 	}
 	wizard.Success(fmt.Sprintf("App %s restarted", appName))
 
-	app, err := stateGetApp(appName)
-	if err != nil {
-		return nil // container restarted, state update is best-effort
-	}
 	app.Status = "running"
 	if err := stateSaveApp(app); err != nil {
 		wizard.Warn("Failed to update app status: " + err.Error())
