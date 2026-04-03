@@ -1,8 +1,9 @@
-.PHONY: build test clean release docker lint
+.PHONY: build test clean release docker docker-build docker-push lint
 
 BINARY := simpledeploy
 VERSION := 0.0.7
 LDFLAGS := -s -w
+REGISTRY := ghcr.io/ersinkoc
 
 build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
@@ -31,5 +32,13 @@ release: clean
 	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-windows-amd64.exe .
 	@echo "Release binaries in dist/"
 
-docker:
+# Build Docker image (local only)
+docker-build:
 	docker build -t $(BINARY):latest .
+
+# Build and push to GHCR
+docker:
+	docker build -t $(REGISTRY)/$(BINARY):$(VERSION) .
+	docker build -t $(REGISTRY)/$(BINARY):latest .
+	docker push $(REGISTRY)/$(BINARY):$(VERSION)
+	docker push $(REGISTRY)/$(BINARY):latest
