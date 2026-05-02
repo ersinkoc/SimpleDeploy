@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -762,7 +763,7 @@ func TestSetupCaddy_DockerComposeUpError(t *testing.T) {
 	setupTestProxyDir(t)
 
 	old := execCommand
-	execCommand = func(name string, arg ...string) commandRunner {
+	execCommand = func(ctx context.Context, name string, arg ...string) commandRunner {
 		return &mockCommandRunner{runErr: fmt.Errorf("compose up failed")}
 	}
 	defer func() { execCommand = old }()
@@ -777,7 +778,7 @@ func TestSetupTraefik_DockerComposeUpError(t *testing.T) {
 	setupTestProxyDir(t)
 
 	old := execCommand
-	execCommand = func(name string, arg ...string) commandRunner {
+	execCommand = func(ctx context.Context, name string, arg ...string) commandRunner {
 		return &mockCommandRunner{runErr: fmt.Errorf("compose up failed")}
 	}
 	defer func() { execCommand = old }()

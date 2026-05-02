@@ -62,7 +62,9 @@ func SetupTraefik(acmeEmail string) error {
 	}
 
 	// Start Traefik
-	cmd := execCommand("docker", "compose", "up", "-d")
+	ctx, cancel := context.WithTimeout(context.Background(), proxySetupTimeout)
+	defer cancel()
+	cmd := execCommand(ctx, "docker", "compose", "up", "-d")
 	cmd.SetDir(getProxyDir())
 	cmd.SetStdout(os.Stdout)
 	cmd.SetStderr(os.Stderr)

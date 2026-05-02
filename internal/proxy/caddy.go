@@ -23,6 +23,14 @@ import (
 // internal/docker/runner.go for read-mostly inspect/list operations.
 const proxyExecTimeout = 30 * time.Second
 
+// proxySetupTimeout is a more generous bound for the one-shot `docker
+// compose up -d` invocation during SetupCaddy / SetupTraefik. The first
+// run pulls the proxy image (caddy:2-alpine ~30 MB, traefik:v3 ~100 MB)
+// over the network, which on a slow link can legitimately take a minute
+// or two. 5 min still bounds a truly wedged daemon while not aborting a
+// healthy first install on a slow connection.
+const proxySetupTimeout = 5 * time.Minute
+
 type commandRunner interface {
 	SetDir(string)
 	SetStdout(io.Writer)
@@ -42,7 +50,9 @@ var (
 	osMkdirAll          = os.MkdirAll
 	osWriteFile         = os.WriteFile
 	dockerCreateNetwork = docker.CreateNetwork
-	execCommand         = func(name string, arg ...string) commandRunner { return &execWrapper{exec.Command(name, arg...)} }
+	execCommand         = func(ctx context.Context, name string, arg ...string) commandRunner {
+		return &execWrapper{exec.CommandContext(ctx, name, arg...)}
+	}
 )
 
 // atomicWriteFile writes data to a sibling temp file then renames it over
@@ -125,7 +135,9 @@ func SetupCaddy(acmeEmail string) error {
 		return err
 	}
 
-	cmd := execCommand("docker", "compose", "up", "-d")
+	ctx, cancel := context.WithTimeout(context.Background(), proxySetupTimeout)
+	defer cancel()
+	cmd := execCommand(ctx, "docker", "compose", "up", "-d")
 	cmd.SetDir(getProxyDir())
 	cmd.SetStdout(os.Stdout)
 	cmd.SetStderr(os.Stderr)
