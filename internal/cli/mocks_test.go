@@ -1015,13 +1015,21 @@ func TestRunDeploy_EncryptError(t *testing.T) {
 	old := stateEncrypt
 	stateEncrypt = func(data string) (string, error) { return "", errors.New("fail") }
 	defer func() { stateEncrypt = old }()
+	// Private repo + token entered → encryption is attempted; we expect
+	// RunDeploy to abort fail-closed rather than persist the token in
+	// plaintext to state.json.
 	input := "https://github.com/test/repo.git\n\ny\ntok\nencerr\n7\n3000\n\nn\n6\nencerr\n\nn\nn\n"
 	setWizardInput(t, input)
+	var err error
 	_ = captureStdout(func() {
-		if err := RunDeploy(); err != nil {
-			t.Fatalf("Expected no error: %v", err)
-		}
+		err = RunDeploy()
 	})
+	if err == nil {
+		t.Fatal("RunDeploy should fail-closed when token encryption fails, but returned nil")
+	}
+	if !strings.Contains(err.Error(), "failed to encrypt git token") {
+		t.Errorf("Error should mention git token encryption, got: %v", err)
+	}
 }
 
 func TestRunDeploy_DecryptError(t *testing.T) {
@@ -1107,9 +1115,21 @@ func TestRunDeploy_DBCredEncryptError(t *testing.T) {
 	old := stateEncrypt
 	stateEncrypt = func(data string) (string, error) { return "", errors.New("fail") }
 	defer func() { stateEncrypt = old }()
+	// Public repo (no git-token encrypt) + selecting a DB makes the credential
+	// encrypt loop the first encryption attempt. Expect fail-closed: aborts
+	// before any state is saved so the DB password never lands in plaintext.
 	input := "https://github.com/test/repo.git\n\nn\ndbencerr\n7\n3000\n\nn\n1\ndbencerr\n\nn\ny\n"
 	setWizardInput(t, input)
-	_ = captureStdout(func() { RunDeploy() })
+	var err error
+	_ = captureStdout(func() {
+		err = RunDeploy()
+	})
+	if err == nil {
+		t.Fatal("RunDeploy should fail-closed when DB credential encryption fails, but returned nil")
+	}
+	if !strings.Contains(err.Error(), "failed to encrypt") {
+		t.Errorf("Error should mention encryption failure, got: %v", err)
+	}
 }
 
 func TestRunDeploy_MalformedHeader(t *testing.T) {

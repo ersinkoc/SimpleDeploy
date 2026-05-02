@@ -44,10 +44,15 @@ func RunDeploy() error {
 		app.GitToken = wizard.AskRequired("GitHub/GitLab Token")
 		encToken, err := stateEncrypt(app.GitToken)
 		if err != nil {
-			wizard.Warn("Failed to encrypt token, storing as plaintext")
-		} else {
-			app.GitToken = encToken
+			// Fail-closed: do not fall back to plaintext storage. The only
+			// realistic failure for state.Encrypt is rand.Reader being
+			// unavailable (the AES/GCM constructors can't fail here — key is
+			// always 32 bytes from sha256). A working install requires the
+			// host CSPRNG, so abort and let the operator fix the underlying
+			// issue rather than silently persist the token in plaintext.
+			return fmt.Errorf("failed to encrypt git token: %w", err)
 		}
+		app.GitToken = encToken
 	}
 
 	// 2. App name
@@ -215,10 +220,12 @@ func RunDeploy() error {
 	for k, v := range app.DBCredentials {
 		enc, err := stateEncrypt(v)
 		if err != nil {
-			wizard.Warn(fmt.Sprintf("Failed to encrypt %s credentials, storing as plaintext", k))
-		} else {
-			app.DBCredentials[k] = enc
+			// Same fail-closed rationale as the git token above: the
+			// alternative is shipping the DB root password to state.json
+			// in plaintext. Return early before any state is saved.
+			return fmt.Errorf("failed to encrypt %s credentials: %w", k, err)
 		}
+		app.DBCredentials[k] = enc
 	}
 
 	// 8. Domain
