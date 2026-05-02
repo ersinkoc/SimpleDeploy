@@ -328,3 +328,47 @@ func ValidateVolumeName(name string) error {
 	}
 	return nil
 }
+
+// headerNameRegex is a conservative subset of RFC 7230 §3.2.6 token
+// characters. The full grammar permits backticks and a few other characters
+// we deliberately exclude — these names are interpolated into Traefik
+// label keys that sit inside YAML double-quoted strings AND into
+// Caddyfile `header` directives that use `{` / `}` for block syntax.
+// Keeping any character that could introduce a quoting boundary out of the
+// allow-set lets us interpolate without further escaping.
+var headerNameRegex = regexp.MustCompile(`^[!#$%&'*+\-.^_|~0-9A-Za-z]+$`)
+
+// ValidateHeaderName checks an HTTP header field name as it would land in
+// proxy configuration (Traefik labels, Caddyfile `header` directives).
+// Defense-in-depth — deploy.go's wizard accepts arbitrary strings from the
+// user, but the value flows through state.json into AddCaddyApp's Caddyfile
+// emission and compose.Generate's Traefik labels. Both interpolate the key
+// without escaping, so a key containing `\n}` could break out of its block
+// and inject directives.
+func ValidateHeaderName(name string) error {
+	if name == "" {
+		return fmt.Errorf("header name cannot be empty")
+	}
+	if len(name) > 256 {
+		return fmt.Errorf("header name too long (max 256)")
+	}
+	if !headerNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid header name %q: must be a conservative HTTP token (no quoting/control chars)", name)
+	}
+	return nil
+}
+
+// ValidateHeaderValue checks an HTTP header value before it is interpolated
+// into proxy configuration. We reject control characters, double quotes,
+// backticks, and backslashes rather than escaping them, because such
+// characters in a Traefik label or Caddyfile value are almost always a
+// misconfig and silently escaping them could mask the bug.
+func ValidateHeaderValue(value string) error {
+	if len(value) > 4096 {
+		return fmt.Errorf("header value too long (max 4096)")
+	}
+	if strings.ContainsAny(value, "\r\n\"`\\") {
+		return fmt.Errorf("header value must not contain quotes, backticks, backslashes, or newlines")
+	}
+	return nil
+}

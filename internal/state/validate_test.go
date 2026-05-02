@@ -527,3 +527,93 @@ func TestValidateVolumeName_Invalid(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHeaderName_Valid(t *testing.T) {
+	// Common HTTP header field names plus the security-header set that
+	// SimpleDeploy injects by default in deploy.go.
+	names := []string{
+		"Content-Type",
+		"X-Frame-Options",
+		"X-Content-Type-Options",
+		"Referrer-Policy",
+		"X-XSS-Protection",
+		"Strict-Transport-Security",
+		"Cache-Control",
+		"X-Custom-Header-1",
+	}
+	for _, n := range names {
+		t.Run(n, func(t *testing.T) {
+			if err := ValidateHeaderName(n); err != nil {
+				t.Errorf("ValidateHeaderName(%q) should succeed, got: %v", n, err)
+			}
+		})
+	}
+}
+
+func TestValidateHeaderName_Invalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"space", "X Frame Options"},
+		{"newline injects directive", "X-Foo\nmalicious"},
+		{"caddy block break", "X-Foo}"},
+		{"open brace", "X-{Foo}"},
+		{"colon (separator, not name)", "X-Foo:"},
+		{"semicolon", "X-Foo;"},
+		{"double quote", `X-"foo"`},
+		{"backtick", "X-Foo`"},
+		{"backslash", `X-Foo\`},
+		{"null byte", "X-Foo\x00"},
+		{"too long", strings.Repeat("a", 257)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateHeaderName(tt.input); err == nil {
+				t.Errorf("ValidateHeaderName(%q) should fail", tt.input)
+			}
+		})
+	}
+}
+
+func TestValidateHeaderValue_Valid(t *testing.T) {
+	values := []string{
+		"",
+		"nosniff",
+		"DENY",
+		"SAMEORIGIN",
+		"strict-origin-when-cross-origin",
+		"max-age=31536000; includeSubDomains",
+		"text/html; charset=utf-8",
+		"public, max-age=3600",
+	}
+	for _, v := range values {
+		t.Run(v, func(t *testing.T) {
+			if err := ValidateHeaderValue(v); err != nil {
+				t.Errorf("ValidateHeaderValue(%q) should succeed, got: %v", v, err)
+			}
+		})
+	}
+}
+
+func TestValidateHeaderValue_Invalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"newline", "value\ninjection"},
+		{"carriage return", "value\rinjection"},
+		{"double quote", `val"ue`},
+		{"backtick", "val`ue"},
+		{"backslash", `val\ue`},
+		{"too long", strings.Repeat("a", 4097)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateHeaderValue(tt.input); err == nil {
+				t.Errorf("ValidateHeaderValue(%q) should fail", tt.input)
+			}
+		})
+	}
+}

@@ -96,8 +96,18 @@ func escapeCaddyValue(s string) string {
 }
 
 func AddCaddyApp(appName, domain string, port int, headers map[string]string) error {
+	// Defense-in-depth: deploy.go validates these at the input layer, but the
+	// values flow through state.json into Caddyfile emission below where they
+	// are interpolated unescaped. A tampered or pre-validator state file
+	// could otherwise inject Caddyfile directives.
+	if err := state.ValidateAppName(appName); err != nil {
+		return fmt.Errorf("invalid app name: %w", err)
+	}
 	if !safeDomainRe.MatchString(domain) {
 		return fmt.Errorf("invalid domain: %q", domain)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port %d (must be 1-65535)", port)
 	}
 
 	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
@@ -111,6 +121,13 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 	b.WriteString(fmt.Sprintf("\n%s {\n", domain))
 	b.WriteString(fmt.Sprintf("    reverse_proxy qd-%s:%d\n", appName, port))
 	for key, val := range headers {
+		// Header NAMES are interpolated raw into the Caddyfile; a key with
+		// `\n}` or whitespace would let an attacker break out of the block
+		// and inject directives. Validate here in addition to escapeCaddyValue
+		// (which only protects the value side).
+		if err := state.ValidateHeaderName(key); err != nil {
+			return fmt.Errorf("invalid header name in app %q: %w", appName, err)
+		}
 		// Escape the value to prevent Caddyfile injection
 		escapedVal := escapeCaddyValue(val)
 		b.WriteString(fmt.Sprintf("    header %s \"%s\"\n", key, escapedVal))

@@ -347,6 +347,23 @@ func TestIsComposeInstalled_False(t *testing.T) {
 	}
 }
 
+// TestIsComposeInstalled_True is the hermetic companion to _False — together
+// they exercise both branches of IsComposeInstalled without relying on the
+// host having (or not having) the docker compose plugin. The skip-only
+// TestIsComposeInstalled below stays around as an integration smoke test
+// when a real docker is present.
+func TestIsComposeInstalled_True(t *testing.T) {
+	oldNew := newDockerCmd
+	newDockerCmd = func(name string, arg ...string) dockerCmd {
+		return &mockCmd{} // Run returns nil → compose plugin "available"
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	if !IsComposeInstalled() {
+		t.Fatal("Expected true when mocked docker compose returns success")
+	}
+}
+
 func TestInstall_Success(t *testing.T) {
 	oldNew := newDockerCmd
 	var buf bytes.Buffer

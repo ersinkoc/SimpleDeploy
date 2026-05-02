@@ -46,14 +46,6 @@ type HealthCheckData struct {
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// headerNameRe matches a conservative subset of RFC 7230 tokens (HTTP
-// header field name). The full token grammar permits backticks, which we
-// still exclude here because the names land in Traefik label keys that sit
-// inside YAML double-quoted strings — keeping any character that could
-// introduce a quoting boundary out of the allow-set lets us interpolate
-// without further escaping.
-var headerNameRe = regexp.MustCompile(`^[!#$%&'*+\-.^_|~0-9A-Za-z]+$`)
-
 // yamlQuote returns a YAML-safe double-quoted string.
 // It escapes special characters and rejects potentially dangerous sequences
 // that could be used for YAML injection attacks.
@@ -178,15 +170,15 @@ func Generate(data *ComposeData) (string, error) {
 
 		if len(data.Headers) > 0 {
 			for key, val := range data.Headers {
-				if !headerNameRe.MatchString(key) {
-					return "", fmt.Errorf("invalid header name %q: must be a conservative HTTP token (no quoting/control chars)", key)
+				if err := state.ValidateHeaderName(key); err != nil {
+					return "", fmt.Errorf("invalid header name in compose data: %w", err)
 				}
 				// The label is wrapped in YAML double quotes; reject control
 				// characters in the value rather than escaping, because a
 				// CR/LF in a Traefik label is almost always a misconfig and
 				// silently escaping it could mask the bug.
-				if strings.ContainsAny(val, "\r\n\"`\\") {
-					return "", fmt.Errorf("invalid header value for %q: must not contain quotes, backticks, backslashes, or newlines", key)
+				if err := state.ValidateHeaderValue(val); err != nil {
+					return "", fmt.Errorf("invalid header value for %q in compose data: %w", key, err)
 				}
 				b.WriteString(fmt.Sprintf("      - \"traefik.http.middlewares.%s-headers.headers.customresponseheaders.%s=%s\"\n",
 					data.AppName, key, val))

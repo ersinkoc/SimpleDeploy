@@ -887,3 +887,89 @@ func TestAddCaddyApp_HeaderInjection(t *testing.T) {
 		t.Error("Escaped header value not found in Caddyfile")
 	}
 }
+
+// TestAddCaddyApp_InvalidAppName ensures AddCaddyApp's defense-in-depth
+// validation rejects app names that would otherwise be interpolated raw
+// into the Caddyfile's `reverse_proxy qd-%s:%d` line.
+func TestAddCaddyApp_InvalidAppName(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
+
+	tests := []struct {
+		name    string
+		appName string
+	}{
+		{"empty", ""},
+		{"newline injects directive", "app\nmalicious"},
+		{"caddy block break", "app}"},
+		{"slash", "app/foo"},
+		{"colon", "app:bar"},
+		{"backtick", "app`whoami`"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AddCaddyApp(tc.appName, "valid.example.com", 3000, nil)
+			if err == nil {
+				t.Errorf("AddCaddyApp should reject app name %q", tc.appName)
+			}
+		})
+	}
+}
+
+// TestAddCaddyApp_InvalidPort verifies that out-of-range ports are rejected
+// before the reverse_proxy directive is emitted. A negative or > 65535 port
+// would produce a syntactically invalid Caddyfile.
+func TestAddCaddyApp_InvalidPort(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
+
+	tests := []struct {
+		name string
+		port int
+	}{
+		{"zero", 0},
+		{"negative", -1},
+		{"too large", 65536},
+		{"way too large", 1 << 30},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AddCaddyApp("valid", "valid.example.com", tc.port, nil)
+			if err == nil {
+				t.Errorf("AddCaddyApp should reject port %d", tc.port)
+			}
+		})
+	}
+}
+
+// TestAddCaddyApp_InvalidHeaderName covers the gap previously left by
+// escapeCaddyValue (which only protected the value half). A header name
+// containing `\n}` would let an attacker break out of the app block and
+// inject Caddyfile directives.
+func TestAddCaddyApp_InvalidHeaderName(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
+
+	tests := []struct {
+		name      string
+		headerKey string
+	}{
+		{"newline injects directive", "X-Foo\nrespond \"pwned\""},
+		{"caddy block break", "X-Foo}"},
+		{"space", "X Frame Options"},
+		{"empty", ""},
+		{"semicolon", "X-Foo;"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AddCaddyApp("valid", "valid.example.com", 3000,
+				map[string]string{tc.headerKey: "ok"})
+			if err == nil {
+				t.Errorf("AddCaddyApp should reject header name %q", tc.headerKey)
+			}
+		})
+	}
+}
