@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
@@ -36,6 +37,14 @@ var (
 )
 
 func SetupCaddy(acmeEmail string) error {
+	// Defense-in-depth: init.go validates this at the input layer, but the
+	// email is interpolated raw into the Caddyfile global block below, so
+	// re-check here. A newline-bearing value would let an attacker append
+	// directives.
+	if err := state.ValidateEmail(acmeEmail); err != nil {
+		return fmt.Errorf("invalid acme email: %w", err)
+	}
+
 	wizard.Info("Setting up Caddy reverse proxy...")
 
 	if err := osMkdirAll(getProxyDir(), 0755); err != nil {

@@ -59,3 +59,62 @@ func ValidateBaseDomain(domain string) error {
 	}
 	return nil
 }
+
+// ValidateSubdomain checks that a subdomain is a single safe DNS label.
+// The subdomain is concatenated with the base domain and used as a per-app
+// hostname; like the base domain it ends up inside Traefik Host(`...`) rules
+// and Caddy site blocks, so it must be free of metacharacters that could
+// inject additional routing config.
+func ValidateSubdomain(sub string) error {
+	if sub == "" {
+		return fmt.Errorf("subdomain cannot be empty")
+	}
+	if len(sub) > 63 {
+		return fmt.Errorf("subdomain must be at most 63 characters")
+	}
+	if strings.ContainsAny(sub, " \t\r\n`'\"()[]{}<>,;|&$\\.") {
+		return fmt.Errorf("subdomain contains invalid characters")
+	}
+	if !dnsLabelRegex.MatchString(sub) {
+		return fmt.Errorf("invalid subdomain %q: must be 1-63 chars, lowercase letters/digits/hyphens, starting and ending with alphanumeric", sub)
+	}
+	return nil
+}
+
+// ValidateAppDomain validates a fully-qualified per-app hostname (subdomain +
+// base domain). Defense-in-depth check used at compose-generation time: a
+// state file written before the validators existed, or one tampered with on
+// disk, could still slip an unsafe value past the input layer.
+func ValidateAppDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("app domain cannot be empty")
+	}
+	return ValidateBaseDomain(domain)
+}
+
+// emailRegex is intentionally narrow: most @ left-hand-side punctuation is
+// rejected because the email value lands in YAML and Caddyfile contexts. We
+// accept the common subset (alphanumerics, dot, underscore, hyphen, plus)
+// rather than the full RFC 5322 grammar.
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// ValidateEmail checks that an address is safe to embed in Caddyfile global
+// blocks ("email %s") and Traefik compose YAML
+// ("--certificatesresolvers.letsencrypt.acme.email=%s"). A newline or
+// backtick in the raw value would let an attacker append directives, so we
+// reject any whitespace/metacharacters explicitly in addition to the regex.
+func ValidateEmail(email string) error {
+	if email == "" {
+		return fmt.Errorf("email cannot be empty")
+	}
+	if len(email) > 254 {
+		return fmt.Errorf("email must be at most 254 characters")
+	}
+	if strings.ContainsAny(email, " \t\r\n`'\"()[]{}<>,;|&$\\") {
+		return fmt.Errorf("email contains invalid characters")
+	}
+	if !emailRegex.MatchString(email) {
+		return fmt.Errorf("invalid email address %q", email)
+	}
+	return nil
+}

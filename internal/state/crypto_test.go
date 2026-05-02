@@ -222,6 +222,12 @@ func TestGetMachineID_HostnameError(t *testing.T) {
 	}
 	defer func() { osHostname = oldHostname }()
 
+	// Clear USER so the fallback hits the "root" branch independent of the
+	// developer's shell. Without this the test was Linux-only — Windows git
+	// bash sets USER, so the fallback returned ":<dev>:simpledeploy" and the
+	// assertion failed locally even though the code under test was correct.
+	t.Setenv("USER", "")
+
 	id := getMachineID()
 	if !strings.Contains(id, ":root:simpledeploy") {
 		t.Errorf("Expected fallback with root user, got %q", id)

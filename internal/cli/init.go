@@ -54,6 +54,9 @@ func RunInit() error {
 	// 4. SSL
 	fmt.Println()
 	acmeEmail := wizard.AskRequired("Let's Encrypt email address")
+	if err := state.ValidateEmail(acmeEmail); err != nil {
+		return fmt.Errorf("invalid email: %w", err)
+	}
 
 	// 5. Webhook secret
 	fmt.Println()

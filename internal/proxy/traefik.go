@@ -5,14 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/config"
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
-
-var safeEmailRe = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // ProxyDir can be overridden for testing. Defaults to config.BaseDir/proxy.
 var ProxyDir string
@@ -25,8 +23,12 @@ func getProxyDir() string {
 }
 
 func SetupTraefik(acmeEmail string) error {
-	if !safeEmailRe.MatchString(acmeEmail) {
-		return fmt.Errorf("invalid ACME email: %q", acmeEmail)
+	// Defense-in-depth: init.go validates at input, but the email is
+	// interpolated raw into the compose YAML and into a .env file below.
+	// Stricter check than the previous regex-only path: state.ValidateEmail
+	// also rejects control characters and shell/YAML metacharacters.
+	if err := state.ValidateEmail(acmeEmail); err != nil {
+		return fmt.Errorf("invalid ACME email: %w", err)
 	}
 
 	wizard.Info("Setting up Traefik reverse proxy...")

@@ -213,7 +213,13 @@ func RunDeploy() error {
 	// 8. Domain
 	fmt.Println()
 	subdomain := wizard.Ask("Subdomain", app.Name)
+	if err := state.ValidateSubdomain(subdomain); err != nil {
+		return fmt.Errorf("invalid subdomain: %w", err)
+	}
 	app.Domain = fmt.Sprintf("%s.%s", subdomain, cfg.BaseDomain)
+	if err := state.ValidateAppDomain(app.Domain); err != nil {
+		return fmt.Errorf("invalid app domain: %w", err)
+	}
 
 	app.Headers = map[string]string{
 		"X-Content-Type-Options": "nosniff",

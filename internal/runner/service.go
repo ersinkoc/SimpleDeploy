@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/config"
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
@@ -26,6 +27,17 @@ var (
 )
 
 func InstallService(baseDomain string, webhookPort int) error {
+	// Defense-in-depth: the base domain is interpolated raw into a Traefik
+	// Host(`...`) label rule below. init.go validates at the input layer,
+	// but a stale or hand-edited state.json could still slip an unsafe
+	// value through.
+	if err := state.ValidateBaseDomain(baseDomain); err != nil {
+		return fmt.Errorf("invalid base domain: %w", err)
+	}
+	if webhookPort < 1 || webhookPort > 65535 {
+		return fmt.Errorf("invalid webhook port %d (must be 1-65535)", webhookPort)
+	}
+
 	wizard.Info("Installing SimpleDeploy as a service...")
 
 	if err := osMkdirAll(getServiceDir(), 0755); err != nil {
