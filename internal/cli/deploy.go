@@ -31,7 +31,13 @@ func RunDeploy() error {
 	// 1. Git Repository
 	fmt.Println()
 	app.Repo = wizard.AskRequired("Git Repository URL")
+	if err := state.ValidateRepoURL(app.Repo); err != nil {
+		return fmt.Errorf("invalid repository URL: %w", err)
+	}
 	app.Branch = wizard.Ask("Branch", "main")
+	if err := state.ValidateBranch(app.Branch); err != nil {
+		return fmt.Errorf("invalid branch: %w", err)
+	}
 
 	private := wizard.Confirm("Private repository?", false)
 	if private {
@@ -158,9 +164,14 @@ func RunDeploy() error {
 	envMap := make(map[string]string)
 	for _, ev := range envVars {
 		kv := strings.SplitN(ev, "=", 2)
-		if len(kv) == 2 {
-			envMap[kv[0]] = kv[1]
+		if len(kv) != 2 {
+			continue
 		}
+		key := strings.TrimSpace(kv[0])
+		if err := state.ValidateEnvKey(key); err != nil {
+			return fmt.Errorf("invalid env var: %w", err)
+		}
+		envMap[key] = kv[1]
 	}
 
 	// 7. Databases

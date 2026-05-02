@@ -118,3 +118,129 @@ func ValidateEmail(email string) error {
 	}
 	return nil
 }
+
+// repoURLRegex matches the three URL forms `git clone` actually consumes in
+// SimpleDeploy: https://, git://, and the scp-style git@host:path. Local
+// file paths are intentionally rejected — the deploy flow always pulls from
+// a remote, and accepting `file:///etc/passwd` or `/etc/shadow` would let a
+// caller make the daemon copy arbitrary host state into an app source dir.
+var repoURLRegex = regexp.MustCompile(
+	`^(?:` +
+		// https://[user[:token]@]host[:port]/path(.git)
+		`https?://[A-Za-z0-9._:%@\-]+(?:/[A-Za-z0-9._\-/~]+)+(?:\.git)?` +
+		`|` +
+		// git://host[:port]/path(.git)
+		`git://[A-Za-z0-9._\-]+(?::[0-9]+)?(?:/[A-Za-z0-9._\-/~]+)+(?:\.git)?` +
+		`|` +
+		// user@host:path(.git) — scp-style
+		`[A-Za-z0-9_\-]+@[A-Za-z0-9._\-]+:[A-Za-z0-9._\-/~]+(?:\.git)?` +
+		`)$`,
+)
+
+// ValidateRepoURL guards the URL passed to git clone/pull. It is also stored
+// on disk and emitted into a "simpledeploy.repo" compose label, so a value
+// containing newlines, backticks, or shell metacharacters could leak into
+// either context. We require one of the canonical forms (https://, git://,
+// or scp-style git@host:path) and reject anything else, including local
+// paths and ssh:// URLs whose user/host parsing varies between git versions.
+func ValidateRepoURL(repo string) error {
+	if repo == "" {
+		return fmt.Errorf("repository URL cannot be empty")
+	}
+	if len(repo) > 1024 {
+		return fmt.Errorf("repository URL too long (max 1024)")
+	}
+	if strings.ContainsAny(repo, " \t\r\n`'\"<>;|&$\\") {
+		return fmt.Errorf("repository URL contains invalid characters")
+	}
+	if !repoURLRegex.MatchString(repo) {
+		return fmt.Errorf("repository URL must be https://, git://, or git@host:path form")
+	}
+	return nil
+}
+
+// branchRegex follows git's own ref format rules in spirit: alphanumerics
+// plus `-` `_` `/` `.`. It is deliberately tighter than git's full grammar
+// (which allows `+`, `=`, etc.) because the branch name lands in compose
+// labels and is also passed as an argv to git — keeping the alphabet small
+// avoids having to reason about every git version's parser.
+var branchRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\-/]*$`)
+
+// ValidateBranch checks the branch name passed to git clone/pull. The name
+// is also written into a "simpledeploy.branch" compose label (yaml-quoted)
+// and shown to the user; we reject `..` and trailing `.lock` per git's own
+// reference-format rules so future git operations don't surprise the user.
+func ValidateBranch(branch string) error {
+	if branch == "" {
+		return fmt.Errorf("branch cannot be empty")
+	}
+	if len(branch) > 255 {
+		return fmt.Errorf("branch name too long (max 255)")
+	}
+	if strings.ContainsAny(branch, " \t\r\n`'\"<>;|&$\\:?*[~^") {
+		return fmt.Errorf("branch contains invalid characters")
+	}
+	if strings.Contains(branch, "..") {
+		return fmt.Errorf("branch must not contain '..'")
+	}
+	if strings.HasSuffix(branch, ".lock") {
+		return fmt.Errorf("branch must not end with '.lock'")
+	}
+	if strings.HasSuffix(branch, "/") || strings.HasPrefix(branch, "/") {
+		return fmt.Errorf("branch must not start or end with '/'")
+	}
+	if !branchRegex.MatchString(branch) {
+		return fmt.Errorf("invalid branch name %q", branch)
+	}
+	return nil
+}
+
+// imageTagRegex matches the Docker reference grammar we actually emit:
+// "<name>[:<tag>]" where name is alphanumerics + `-` `_` `.` `/` (registry
+// path) and tag is alphanumerics + `-` `_` `.`. Digests (@sha256:...) are
+// not currently produced by SimpleDeploy and so deliberately rejected; if
+// support is added, broaden this regex first.
+var imageTagRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9._\-/]*[a-z0-9])?(:[A-Za-z0-9._\-]+)?$`)
+
+// ValidateImageTag is a defense-in-depth check on values interpolated into
+// "image: %s" compose lines. The build pipeline currently produces names
+// like "qd-myapp:20260502-153045"; this validator codifies that contract so
+// a corrupted state file or a future buildpack bug can't put YAML-breaking
+// characters into the compose output.
+func ValidateImageTag(tag string) error {
+	if tag == "" {
+		return fmt.Errorf("image tag cannot be empty")
+	}
+	if len(tag) > 255 {
+		return fmt.Errorf("image tag too long (max 255)")
+	}
+	if strings.ContainsAny(tag, " \t\r\n`'\"<>;|&$\\") {
+		return fmt.Errorf("image tag contains invalid characters")
+	}
+	if !imageTagRegex.MatchString(tag) {
+		return fmt.Errorf("invalid image tag %q (expected name[:tag] with [a-z0-9._/-])", tag)
+	}
+	return nil
+}
+
+// envKeyRegex matches a POSIX-ish environment variable name. Identical to
+// the regex compose/generator.go uses internally; centralizing it here lets
+// the deploy wizard reject bad keys at input time instead of failing a
+// later compose-generation step.
+var envKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidateEnvKey rejects environment variable names that would be illegal
+// inside a YAML environment block ("KEY=value") or a shell `export`. The
+// value half is left unchecked — yamlQuote handles escaping at the consumer.
+func ValidateEnvKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("env key cannot be empty")
+	}
+	if len(key) > 255 {
+		return fmt.Errorf("env key too long (max 255)")
+	}
+	if !envKeyRegex.MatchString(key) {
+		return fmt.Errorf("invalid env key %q (must match [A-Za-z_][A-Za-z0-9_]*)", key)
+	}
+	return nil
+}

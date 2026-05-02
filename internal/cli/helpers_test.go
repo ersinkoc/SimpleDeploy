@@ -1824,21 +1824,24 @@ func TestRunDeploy_CancelDeploy(t *testing.T) {
 	cfg := &state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"}
 	state.SaveConfig(cfg)
 
-	// Create a local git repo to clone from
-	repoDir := filepath.Join(dir, "repo")
-	os.MkdirAll(repoDir, 0755)
-	runGitCmd(t, repoDir, "init", "-b", "main")
-	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
-	runGitCmd(t, repoDir, "config", "user.name", "Test")
-	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("hello"), 0644)
-	runGitCmd(t, repoDir, "add", ".")
-	runGitCmd(t, repoDir, "commit", "-m", "initial")
+	// ValidateRepoURL rejects local filesystem paths in production. For this
+	// test we mock gitClone so the URL passes validation but no real network
+	// fetch happens — we just write a Dockerfile into sourceDir so the deploy
+	// flow has something to chew on before the user cancels.
+	origGitClone := gitClone
+	t.Cleanup(func() { gitClone = origGitClone })
+	gitClone = func(repo, branch, dest, token string) error {
+		if err := os.MkdirAll(dest, 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dest, "Dockerfile"), []byte("FROM scratch\n"), 0644)
+	}
 
-	// Input: repo path → branch (default main) → not private → app name →
+	// Input: repo URL → branch (default main) → not private → app name →
 	// app type (7=Dockerfile) → port → no env vars → no .env →
 	// no databases (6=None) → subdomain → no extra headers →
 	// no webhook → cancel deploy
-	input := repoDir + "\n\nn\ncancelapp\n7\n3000\n\nn\n6\ncancelapp\n\nn\nn\n"
+	input := "https://github.com/test/cancelapp.git\n\nn\ncancelapp\n7\n3000\n\nn\n6\ncancelapp\n\nn\nn\n"
 	setWizardInput(t, input)
 
 	_ = captureStdout(func() {

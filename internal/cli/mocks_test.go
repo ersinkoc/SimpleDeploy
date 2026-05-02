@@ -32,6 +32,39 @@ func setupDeployTest(t *testing.T, files map[string]string) (string, string) {
 	return repoDir, ""
 }
 
+// mockGitCloneFromDir installs a gitClone mock that copies the contents of
+// repoDir into the destination, restoring the original on test cleanup.
+// ValidateRepoURL rejects local filesystem paths in production, so tests must
+// use a valid URL placeholder; this mock keeps the deploy pipeline supplied
+// with real test fixtures without going to the network.
+func mockGitCloneFromDir(t *testing.T, repoDir string) {
+	t.Helper()
+	origGitClone := gitClone
+	t.Cleanup(func() { gitClone = origGitClone })
+	gitClone = func(repo, branch, dest, token string) error {
+		if err := os.MkdirAll(dest, 0755); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(repoDir)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(repoDir, e.Name()))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(dest, e.Name()), data, 0644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	cmd := exec.Command("git", "init", "-b", "main")
@@ -50,10 +83,18 @@ func initGitRepo(t *testing.T, dir string) {
 	cmd = exec.Command("git", "commit", "-m", "initial")
 	cmd.Dir = dir
 	cmd.Run()
+	// Production gitClone refuses local paths (ValidateRepoURL); install a
+	// mock that copies dir → dest so the deploy pipeline gets the test
+	// fixture without needing a real remote.
+	mockGitCloneFromDir(t, dir)
 }
 
 func deployInputBasic(repoDir, appType, appName, startDeploy string) string {
-	inputs := []string{repoDir, "", "n", appName, appType, "3000", "", "n", "6", appName, "", "n", startDeploy}
+	// repoDir is unused now that gitClone is mocked in setupDeployTest — kept
+	// in the signature so callers don't have to change. Use a fixed valid URL
+	// that satisfies state.ValidateRepoURL.
+	_ = repoDir
+	inputs := []string{"https://github.com/test/" + appName + ".git", "", "n", appName, appType, "3000", "", "n", "6", appName, "", "n", startDeploy}
 	return strings.Join(inputs, "\n") + "\n"
 }
 
@@ -927,7 +968,7 @@ func TestRunDeploy_PortInvalid(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\nportinv\n7\nabc\n\nn\n6\nportinv\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\nportinv\n7\nabc\n\nn\n6\nportinv\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 	app, _ := state.GetApp("portinv")
@@ -940,7 +981,7 @@ func TestRunDeploy_PortOutOfRange(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\nportoor\n7\n99999\n\nn\n6\nportoor\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\nportoor\n7\n99999\n\nn\n6\nportoor\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 	app, _ := state.GetApp("portoor")
@@ -959,7 +1000,7 @@ func TestRunDeploy_PrivateRepo(t *testing.T) {
 	oldDec := stateDecrypt
 	stateDecrypt = func(data string) (string, error) { return strings.TrimPrefix(data, "enc-"), nil }
 	defer func() { stateDecrypt = oldDec }()
-	input := repoDir + "\n\ny\nmytoken\nprivateapp\n7\n3000\n\nn\n6\nprivateapp\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\ny\nmytoken\nprivateapp\n7\n3000\n\nn\n6\nprivateapp\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 	app, _ := state.GetApp("privateapp")
@@ -974,7 +1015,7 @@ func TestRunDeploy_EncryptError(t *testing.T) {
 	old := stateEncrypt
 	stateEncrypt = func(data string) (string, error) { return "", errors.New("fail") }
 	defer func() { stateEncrypt = old }()
-	input := repoDir + "\n\ny\ntok\nencerr\n7\n3000\n\nn\n6\nencerr\n\nn\nn\n"
+	input := "https://github.com/test/repo.git\n\ny\ntok\nencerr\n7\n3000\n\nn\n6\nencerr\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
 		if err := RunDeploy(); err != nil {
@@ -992,7 +1033,7 @@ func TestRunDeploy_DecryptError(t *testing.T) {
 	oldDec := stateDecrypt
 	stateDecrypt = func(data string) (string, error) { return "", errors.New("fail") }
 	defer func() { stateDecrypt = oldDec }()
-	input := repoDir + "\n\ny\ntok\ndecerr\n7\n3000\n\nn\n6\ndecerr\n\nn\nn\n"
+	input := "https://github.com/test/repo.git\n\ny\ntok\ndecerr\n7\n3000\n\nn\n6\ndecerr\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
 		if err := RunDeploy(); err != nil {
@@ -1011,7 +1052,7 @@ func TestRunDeploy_WriteEnvCustomPathError(t *testing.T) {
 		return errors.New("fail")
 	}
 	defer func() { osWriteFile = oldWrite }()
-	input := repoDir + "\n\nn\nenvwriteerr\n7\n3000\n\ny\n" + customEnv + "\n6\nenvwriteerr\n\nn\nn\n"
+	input := "https://github.com/test/repo.git\n\nn\nenvwriteerr\n7\n3000\n\ny\n" + customEnv + "\n6\nenvwriteerr\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
 		if err := RunDeploy(); err != nil {
@@ -1024,7 +1065,7 @@ func TestRunDeploy_MalformedEnvVar(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\nmalform\n7\n3000\nbadvar\nKEY=VALUE\n\nn\n6\nmalform\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\nmalform\n7\n3000\nbadvar\nKEY=VALUE\n\nn\n6\nmalform\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 }
@@ -1037,7 +1078,7 @@ func TestRunDeploy_DBProvisionError(t *testing.T) {
 		return nil, nil, nil, errors.New("fail")
 	}
 	defer func() { dbProvisionDatabases = old }()
-	input := repoDir + "\n\nn\ndbfail\n7\n3000\n\nn\n1\ndbfail\n\nn\nn\n"
+	input := "https://github.com/test/repo.git\n\nn\ndbfail\n7\n3000\n\nn\n1\ndbfail\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
 		if err := RunDeploy(); err == nil {
@@ -1050,7 +1091,7 @@ func TestRunDeploy_DBWithEnvVars(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\ndbenv\n7\n3000\n\nn\n1\ndbenv\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\ndbenv\n7\n3000\n\nn\n1\ndbenv\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 	app, _ := state.GetApp("dbenv")
@@ -1066,7 +1107,7 @@ func TestRunDeploy_DBCredEncryptError(t *testing.T) {
 	old := stateEncrypt
 	stateEncrypt = func(data string) (string, error) { return "", errors.New("fail") }
 	defer func() { stateEncrypt = old }()
-	input := repoDir + "\n\nn\ndbencerr\n7\n3000\n\nn\n1\ndbencerr\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\ndbencerr\n7\n3000\n\nn\n1\ndbencerr\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 }
@@ -1075,7 +1116,7 @@ func TestRunDeploy_MalformedHeader(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\nhdrbad\n7\n3000\n\nn\n6\nhdrbad\nbadheader\nX-Custom: value\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\nhdrbad\n7\n3000\n\nn\n6\nhdrbad\nbadheader\nX-Custom: value\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 }
@@ -1084,7 +1125,7 @@ func TestRunDeploy_WithDatabaseSummary(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\ndbsum\n7\n3000\n\nn\n1\ndbsum\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\ndbsum\n7\n3000\n\nn\n1\ndbsum\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 }
@@ -1107,7 +1148,7 @@ func TestRunDeploy_CaddyPostDeployErrors(t *testing.T) {
 	oldReload := proxyReloadCaddy
 	proxyReloadCaddy = func() error { return errors.New("reload fail") }
 	defer func() { proxyReloadCaddy = oldReload }()
-	input := repoDir + "\n\nn\ncaddyerr\n7\n3000\n\nn\n6\ncaddyerr\n\nn\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\ncaddyerr\n7\n3000\n\nn\n6\ncaddyerr\n\nn\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 }
@@ -1117,7 +1158,7 @@ func TestRunDeploy_EnvFile(t *testing.T) {
 	initGitRepo(t, repoDir)
 	customEnv := filepath.Join(repoDir, "custom.env")
 	os.WriteFile(customEnv, []byte("KEY=VALUE\n"), 0644)
-	input := repoDir + "\n\nn\nenvapp\n7\n3000\n\ny\n" + customEnv + "\n6\nenvapp\n\nn\nn\n"
+	input := "https://github.com/test/repo.git\n\nn\nenvapp\n7\n3000\n\ny\n" + customEnv + "\n6\nenvapp\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
 		if err := RunDeploy(); err != nil {
@@ -1129,7 +1170,7 @@ func TestRunDeploy_EnvFile(t *testing.T) {
 func TestRunDeploy_EnvFileReadError(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
-	input := repoDir + "\n\nn\nenvapp\n7\n3000\n\ny\n/nonexistent/env\n6\nenvapp\n\nn\nn\n"
+	input := "https://github.com/test/repo.git\n\nn\nenvapp\n7\n3000\n\ny\n/nonexistent/env\n6\nenvapp\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
 		if err := RunDeploy(); err != nil {
@@ -1142,7 +1183,7 @@ func TestRunDeploy_WebhookEnabled(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	defer mockDeploySuccess()()
-	input := repoDir + "\n\nn\nhookapp\n7\n3000\n\nn\n6\nhookapp\n\ny\ny\n"
+	input := "https://github.com/test/repo.git\n\nn\nhookapp\n7\n3000\n\nn\n6\nhookapp\n\ny\ny\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() { RunDeploy() })
 	app, _ := state.GetApp("hookapp")
