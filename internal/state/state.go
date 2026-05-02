@@ -107,10 +107,11 @@ func getStatePath() string {
 	return filepath.Join(home, ".simpledeploy", "state.json")
 }
 
-func Load() (*State, error) {
-	mu.Lock()
-	defer mu.Unlock()
-
+// loadStateLocked reads state from disk. Caller MUST hold mu.
+// This is the underlying read primitive used by Load and the
+// load-modify-save mutators (SaveApp/RemoveApp/SaveConfig) so a single
+// critical section can span the full transaction.
+func loadStateLocked() (*State, error) {
 	path := getStatePath()
 	data, err := osReadFile(path)
 	if err != nil {
@@ -133,17 +134,9 @@ func Load() (*State, error) {
 	return &s, nil
 }
 
-func Save(s *State) error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	// Acquire file-level lock for cross-process safety
-	unlock, err := lockStateFile()
-	if err != nil {
-		return fmt.Errorf("failed to lock state: %w", err)
-	}
-	defer unlock()
-
+// saveStateLocked writes state to disk atomically. Caller MUST hold mu
+// AND the cross-process file lock.
+func saveStateLocked(s *State) error {
 	path := getStatePath()
 	dir := filepath.Dir(path)
 	if err := osMkdirAll(dir, 0700); err != nil {
@@ -155,14 +148,11 @@ func Save(s *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	// Write atomically: write to temp file, fsync, then rename to prevent
-	// corruption on crash. Rename is atomic on most filesystems.
 	tmpPath := path + ".tmp"
 	tmpFile, err := osOpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create temp state file: %w", err)
 	}
-	// Ensure cleanup on error
 	defer func() {
 		if tmpFile != nil {
 			tmpFile.Close()
@@ -178,13 +168,32 @@ func Save(s *State) error {
 		return fmt.Errorf("failed to sync state file: %w", err)
 	}
 	tmpFile.Close()
-	tmpFile = nil // Prevent double-close in defer
+	tmpFile = nil
 
 	if err := osRename(tmpPath, path); err != nil {
 		osRemove(tmpPath)
 		return fmt.Errorf("failed to rename state file: %w", err)
 	}
 	return nil
+}
+
+func Load() (*State, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadStateLocked()
+}
+
+func Save(s *State) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		return fmt.Errorf("failed to lock state: %w", err)
+	}
+	defer unlock()
+
+	return saveStateLocked(s)
 }
 
 func GetApp(name string) (*AppConfig, error) {
@@ -217,30 +226,57 @@ func GetApp(name string) (*AppConfig, error) {
 }
 
 func SaveApp(app *AppConfig) error {
-	s, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		return fmt.Errorf("failed to lock state: %w", err)
+	}
+	defer unlock()
+
+	s, err := loadStateLocked()
 	if err != nil {
 		return err
 	}
 	s.Apps[app.Name] = app
-	return Save(s)
+	return saveStateLocked(s)
 }
 
 func RemoveApp(name string) error {
-	s, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		return fmt.Errorf("failed to lock state: %w", err)
+	}
+	defer unlock()
+
+	s, err := loadStateLocked()
 	if err != nil {
 		return err
 	}
 	delete(s.Apps, name)
-	return Save(s)
+	return saveStateLocked(s)
 }
 
 func SaveConfig(cfg *GlobalConfig) error {
-	s, err := Load()
+	mu.Lock()
+	defer mu.Unlock()
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		return fmt.Errorf("failed to lock state: %w", err)
+	}
+	defer unlock()
+
+	s, err := loadStateLocked()
 	if err != nil {
 		return err
 	}
 	s.Config = cfg
-	return Save(s)
+	return saveStateLocked(s)
 }
 
 func GetConfig() (*GlobalConfig, error) {

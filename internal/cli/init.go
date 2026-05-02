@@ -42,6 +42,9 @@ func RunInit() error {
 	// 3. Domain
 	fmt.Println()
 	baseDomain := wizard.AskRequired("Base domain (e.g.: apps.example.com)")
+	if err := state.ValidateBaseDomain(baseDomain); err != nil {
+		return fmt.Errorf("invalid base domain: %w", err)
+	}
 
 	if !wizard.Confirm(
 		fmt.Sprintf("Wildcard DNS configured? (*.%s → this server)", baseDomain), true) {

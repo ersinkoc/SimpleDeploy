@@ -625,7 +625,8 @@ func TestGetConfig_LoadError(t *testing.T) {
 }
 
 // TestStateFileLocking tests that concurrent Save operations from different
-// goroutines don't corrupt the state file.
+// goroutines don't corrupt the state file AND that no apps are lost to
+// read-modify-write races inside SaveApp.
 func TestStateFileLocking(t *testing.T) {
 	tempStateDir(t)
 
@@ -636,11 +637,11 @@ func TestStateFileLocking(t *testing.T) {
 	}
 
 	// Concurrent save operations
+	const numGoroutines = 10
 	var wg sync.WaitGroup
-	errors := make(chan error, 10)
+	errors := make(chan error, numGoroutines)
 
-	// 10 goroutines doing SaveApp operations
-	for i := 0; i < 10; i++ {
+	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -655,25 +656,27 @@ func TestStateFileLocking(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// Check for errors
 	for err := range errors {
 		t.Error(err)
 	}
 
-	// Verify state consistency - all apps should be present
+	// Verify state consistency: all apps must survive concurrent writes.
+	// Before the load-modify-save cycle was wrapped in a single critical
+	// section, this test tolerated data loss; now it must not.
 	s, err := Load()
 	if err != nil {
 		t.Fatalf("Failed to load state: %v", err)
 	}
 
-	// Should have all 10 apps (or at least not corrupted)
-	// Note: Due to read-modify-write race, some apps might be lost,
-	// but the file should not be corrupted
-	appCount := len(s.Apps)
-	if appCount == 0 {
-		t.Error("Expected at least some apps, got none")
+	if got := len(s.Apps); got != numGoroutines {
+		t.Errorf("Expected all %d apps to survive concurrent writes, got %d", numGoroutines, got)
 	}
-	t.Logf("State has %d apps after concurrent writes", appCount)
+	for i := 0; i < numGoroutines; i++ {
+		name := fmt.Sprintf("locking-app-%d", i)
+		if _, ok := s.Apps[name]; !ok {
+			t.Errorf("Missing app %q after concurrent SaveApp", name)
+		}
+	}
 
 	// Verify no corruption by checking we can read the file again
 	_, err = Load()

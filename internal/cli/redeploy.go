@@ -87,8 +87,9 @@ func RunRedeploy(args []string) error {
 		}
 	}
 
-	// Cleanup old images (keep last 3) - run synchronously to avoid race conditions
-	// with concurrent redeploy/remove operations on the same app
+	// Cleanup old images (keep last 3) in the background so a slow docker
+	// listing doesn't delay redeploy completion. The goroutine is wrapped
+	// in a recover so a panic in image listing doesn't crash the CLI.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -115,32 +116,40 @@ func RunRedeploy(args []string) error {
 
 // replaceAppImage replaces only the app service's image line in compose content.
 // It targets the line under the app name service block, not database image lines.
+//
+// The match is robust against arbitrary indentation widths (2, 4, or tab) and
+// trailing whitespace on the service header line. The previous version compared
+// against a hard-coded "  appname:" string, which silently failed if the
+// generator's indentation ever changed.
 func replaceAppImage(content, appName, newImage string) string {
 	lines := strings.Split(content, "\n")
+	header := appName + ":"
 	inAppService := false
-	appServicePrefix := "  " + appName + ":"
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Detect start of app service block
-		if trimmed == appServicePrefix || line == appServicePrefix {
-			inAppService = true
+		// Detect start of app service block: a line that, when trimmed,
+		// equals "<appName>:" AND was indented (so it's a service entry,
+		// not a top-level key like "services:").
+		if !inAppService {
+			if trimmed == header && len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+				inAppService = true
+			}
 			continue
 		}
 
-		// If inside app service, replace the first "image:" line
-		if inAppService {
-			if strings.HasPrefix(trimmed, "image:") {
-				// Preserve indentation
-				indent := line[:len(line)-len(trimmed)]
-				lines[i] = indent + "image: " + newImage
-				break // Only replace the first match in the app service
-			}
-			// If we hit another top-level key, we've left the app service
-			if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && trimmed != "" {
-				break
-			}
+		// Inside the app service: replace the first "image:" line we see.
+		if strings.HasPrefix(trimmed, "image:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + "image: " + newImage
+			break
+		}
+
+		// If we hit another top-level key (zero indent, non-empty), we've
+		// left the service block without finding an image line. Stop.
+		if trimmed != "" && line[0] != ' ' && line[0] != '\t' {
+			break
 		}
 	}
 

@@ -187,6 +187,44 @@ func TestReplaceAppImage_EmptyContent(t *testing.T) {
 	}
 }
 
+func TestReplaceAppImage_FourSpaceIndent(t *testing.T) {
+	// The previous predicate hard-coded "  " (two spaces) and silently
+	// failed on any other indent width.
+	input := "services:\n    myapp:\n        image: myapp:old\n"
+	result := replaceAppImage(input, "myapp", "myapp:new")
+	if !strings.Contains(result, "image: myapp:new") {
+		t.Errorf("Should replace image with 4-space indent, got:\n%s", result)
+	}
+	if strings.Contains(result, "image: myapp:old") {
+		t.Error("Old image should be gone")
+	}
+}
+
+func TestReplaceAppImage_TabIndent(t *testing.T) {
+	input := "services:\n\tmyapp:\n\t\timage: myapp:old\n"
+	result := replaceAppImage(input, "myapp", "myapp:new")
+	if !strings.Contains(result, "image: myapp:new") {
+		t.Errorf("Should replace image with tab indent, got:\n%s", result)
+	}
+}
+
+func TestReplaceAppImage_AppNameSubstring(t *testing.T) {
+	// "myapp" is a substring of "myapp-db" — must not match the wrong service.
+	input := `services:
+  myapp-db:
+    image: postgres:16
+  myapp:
+    image: myapp:old
+`
+	result := replaceAppImage(input, "myapp", "myapp:new")
+	if !strings.Contains(result, "image: myapp:new") {
+		t.Error("Should replace myapp image")
+	}
+	if !strings.Contains(result, "image: postgres:16") {
+		t.Error("Should NOT replace myapp-db image")
+	}
+}
+
 func TestBuildComposeData_EncryptionError(t *testing.T) {
 	dir := t.TempDir()
 	state.InitState(dir)
