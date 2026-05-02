@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,13 +75,17 @@ func SetupTraefik(acmeEmail string) error {
 }
 
 func StopTraefik() error {
-	cmd := exec.Command("docker", "compose", "down")
+	ctx, cancel := context.WithTimeout(context.Background(), proxyExecTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "compose", "down")
 	cmd.Dir = getProxyDir()
 	return cmd.Run()
 }
 
 func RestartTraefik() error {
-	cmd := exec.Command("docker", "compose", "restart")
+	ctx, cancel := context.WithTimeout(context.Background(), proxyExecTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "compose", "restart")
 	cmd.Dir = getProxyDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

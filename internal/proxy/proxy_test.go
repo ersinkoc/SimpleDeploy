@@ -973,3 +973,139 @@ func TestAddCaddyApp_InvalidHeaderName(t *testing.T) {
 		})
 	}
 }
+
+// TestAddCaddyApp_DedupSameDomain verifies that calling AddCaddyApp twice for
+// the same domain does NOT produce two routing blocks. With the previous
+// implementation a redeploy that changed port or headers would leave the old
+// block in place; Caddy would then parse two blocks for the same hostname and
+// pick the one that came first, masking the updated config.
+func TestAddCaddyApp_DedupSameDomain(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
+
+	if err := AddCaddyApp("app1", "app1.example.com", 3000, nil); err != nil {
+		t.Fatalf("first AddCaddyApp failed: %v", err)
+	}
+	if err := AddCaddyApp("app1", "app1.example.com", 8080, nil); err != nil {
+		t.Fatalf("second AddCaddyApp failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(caddyfilePath)
+	content := string(data)
+
+	if strings.Count(content, "app1.example.com {") != 1 {
+		t.Errorf("expected exactly one app1.example.com block, got %d. Caddyfile:\n%s",
+			strings.Count(content, "app1.example.com {"), content)
+	}
+	if strings.Contains(content, "qd-app1:3000") {
+		t.Errorf("old port 3000 should have been removed. Caddyfile:\n%s", content)
+	}
+	if !strings.Contains(content, "qd-app1:8080") {
+		t.Errorf("new port 8080 should be present. Caddyfile:\n%s", content)
+	}
+}
+
+// TestAddCaddyApp_DedupPreservesOtherDomains ensures that re-adding domain A
+// does not disturb the block for domain B.
+func TestAddCaddyApp_DedupPreservesOtherDomains(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
+
+	if err := AddCaddyApp("app1", "app1.example.com", 3000, nil); err != nil {
+		t.Fatalf("AddCaddyApp app1 failed: %v", err)
+	}
+	if err := AddCaddyApp("app2", "app2.example.com", 4000, nil); err != nil {
+		t.Fatalf("AddCaddyApp app2 failed: %v", err)
+	}
+	// Re-add app1 with a new port
+	if err := AddCaddyApp("app1", "app1.example.com", 5000, nil); err != nil {
+		t.Fatalf("AddCaddyApp app1 (redeploy) failed: %v", err)
+	}
+
+	data, _ := os.ReadFile(caddyfilePath)
+	content := string(data)
+
+	if strings.Count(content, "app1.example.com {") != 1 {
+		t.Errorf("app1 should appear exactly once after re-add. Caddyfile:\n%s", content)
+	}
+	if strings.Count(content, "app2.example.com {") != 1 {
+		t.Errorf("app2 should still appear exactly once. Caddyfile:\n%s", content)
+	}
+	if !strings.Contains(content, "qd-app1:5000") {
+		t.Errorf("app1 redeploy port 5000 should be present. Caddyfile:\n%s", content)
+	}
+	if !strings.Contains(content, "qd-app2:4000") {
+		t.Errorf("app2 port 4000 should be preserved. Caddyfile:\n%s", content)
+	}
+}
+
+// TestAtomicWriteFile_BasicWrite covers the happy path: data lands in the
+// destination file and no .tmp file is left behind.
+func TestAtomicWriteFile_BasicWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+
+	if err := atomicWriteFile(path, []byte("hello"), 0644); err != nil {
+		t.Fatalf("atomicWriteFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after atomicWriteFile failed: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("got %q, want \"hello\"", string(data))
+	}
+
+	// .tmp file must not be left behind on success
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf(".tmp file should not exist after successful rename, got err=%v", err)
+	}
+}
+
+// TestAtomicWriteFile_OverwritesExisting verifies that a second call replaces
+// the existing file contents (this is the redeploy / Caddyfile-edit scenario).
+func TestAtomicWriteFile_OverwritesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatalf("setup WriteFile failed: %v", err)
+	}
+	if err := atomicWriteFile(path, []byte("new"), 0644); err != nil {
+		t.Fatalf("atomicWriteFile failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(data) != "new" {
+		t.Errorf("got %q, want \"new\"", string(data))
+	}
+}
+
+// TestFilterCaddyDomain_RemovesBlock covers the basic line-filtering logic,
+// independent of file I/O. AddCaddyApp's dedup and RemoveCaddyApp both rely
+// on this helper, so a single unit test pins the behavior.
+func TestFilterCaddyDomain_RemovesBlock(t *testing.T) {
+	input := "{\n    email a@b.c\n}\n\nfoo.example.com {\n    reverse_proxy qd-foo:3000\n}\n\nbar.example.com {\n    reverse_proxy qd-bar:4000\n}\n"
+	out := filterCaddyDomain(input, "foo.example.com")
+	if strings.Contains(out, "foo.example.com") {
+		t.Errorf("foo block should be removed:\n%s", out)
+	}
+	if !strings.Contains(out, "bar.example.com") {
+		t.Errorf("bar block should remain:\n%s", out)
+	}
+}
+
+// TestFilterCaddyDomain_NoMatch should be a no-op when the domain is absent.
+func TestFilterCaddyDomain_NoMatch(t *testing.T) {
+	input := "{\n    email a@b.c\n}\n\nfoo.example.com {\n    reverse_proxy qd-foo:3000\n}\n"
+	out := filterCaddyDomain(input, "nope.example.com")
+	if !strings.Contains(out, "foo.example.com") {
+		t.Errorf("foo block should be preserved when filtering an unrelated domain:\n%s", out)
+	}
+}

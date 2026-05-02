@@ -258,7 +258,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("Webhook triggered deploy for %s", appName)
 
-			// Create a context with timeout for the deploy
+			// Observability-only timeout: the deploy handler signature is
+			// `func(string) error` and cannot accept a context, so this ctx
+			// does NOT actually cancel an in-flight deploy. It exists so the
+			// operator gets a "timed out after X, waiting for deploy to
+			// finish" log line — useful when investigating webhook latency or
+			// a wedged deploy. Adding cancellation would require changing
+			// SetDeployHandler's signature, which is intentionally deferred
+			// to avoid breaking external callers in the CLI package.
 			ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
 			defer cancel()
 

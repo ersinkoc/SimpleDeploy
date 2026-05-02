@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -8,11 +9,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
+
+// proxyExecTimeout bounds the time we spend waiting for `docker compose
+// down` / `docker exec ... caddy reload` / `docker compose restart` style
+// commands. A wedged Docker daemon would otherwise hang the operator's
+// CLI session indefinitely; 30 s matches the timeouts used in
+// internal/docker/runner.go for read-mostly inspect/list operations.
+const proxyExecTimeout = 30 * time.Second
 
 type commandRunner interface {
 	SetDir(string)
@@ -35,6 +44,55 @@ var (
 	dockerCreateNetwork = docker.CreateNetwork
 	execCommand         = func(name string, arg ...string) commandRunner { return &execWrapper{exec.Command(name, arg...)} }
 )
+
+// atomicWriteFile writes data to a sibling temp file then renames it over
+// the destination. On both POSIX and Windows os.Rename is atomic when
+// source and destination are on the same filesystem, so a partial /
+// interrupted write can never leave a half-written Caddyfile in place
+// (which would either crash Caddy on reload or, worse, accept a malformed
+// routing config). The temp file uses the same parent directory to keep
+// the rename intra-fs.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		// Best-effort cleanup — leaving the .tmp behind is safer than
+		// returning the rename error and pretending nothing happened.
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// filterCaddyDomain returns the input Caddyfile content with the block for
+// `domain` removed. Used by both RemoveCaddyApp (to delete a block) and
+// AddCaddyApp (to dedupe — calling AddCaddyApp twice for the same domain
+// must not produce two ambiguous routing blocks).
+func filterCaddyDomain(content, domain string) string {
+	lines := strings.Split(content, "\n")
+	result := make([]string, 0, len(lines))
+	skip := false
+	depth := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !skip && (trimmed == domain+" {" || trimmed == domain+"{") {
+			skip = true
+			depth = 1
+			continue
+		}
+		if skip {
+			depth += strings.Count(line, "{") - strings.Count(line, "}")
+			if depth <= 0 {
+				skip = false
+			}
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.Join(result, "\n")
+}
 
 func SetupCaddy(acmeEmail string) error {
 	// Defense-in-depth: init.go validates this at the input layer, but the
@@ -116,11 +174,9 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 		return fmt.Errorf("failed to read Caddyfile: %w", err)
 	}
 
-	var b strings.Builder
-	b.WriteString(string(data))
-	b.WriteString(fmt.Sprintf("\n%s {\n", domain))
-	b.WriteString(fmt.Sprintf("    reverse_proxy qd-%s:%d\n", appName, port))
-	for key, val := range headers {
+	// Validate every header before touching the file so a partially-valid
+	// header map cannot leave the Caddyfile half-rewritten on the disk.
+	for key := range headers {
 		// Header NAMES are interpolated raw into the Caddyfile; a key with
 		// `\n}` or whitespace would let an attacker break out of the block
 		// and inject directives. Validate here in addition to escapeCaddyValue
@@ -128,13 +184,30 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 		if err := state.ValidateHeaderName(key); err != nil {
 			return fmt.Errorf("invalid header name in app %q: %w", appName, err)
 		}
+	}
+
+	// Dedup: if AddCaddyApp is called twice for the same domain (e.g. on a
+	// redeploy that changes port or headers) the previous block must be
+	// stripped first. Otherwise Caddy would parse two routing blocks for the
+	// same hostname and pick whichever came first, silently masking the
+	// updated config.
+	existing := filterCaddyDomain(string(data), domain)
+
+	var b strings.Builder
+	b.WriteString(existing)
+	if !strings.HasSuffix(existing, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString(fmt.Sprintf("\n%s {\n", domain))
+	b.WriteString(fmt.Sprintf("    reverse_proxy qd-%s:%d\n", appName, port))
+	for key, val := range headers {
 		// Escape the value to prevent Caddyfile injection
 		escapedVal := escapeCaddyValue(val)
 		b.WriteString(fmt.Sprintf("    header %s \"%s\"\n", key, escapedVal))
 	}
 	b.WriteString("}\n")
 
-	return os.WriteFile(caddyfilePath, []byte(b.String()), 0644)
+	return atomicWriteFile(caddyfilePath, []byte(b.String()), 0644)
 }
 
 func RemoveCaddyApp(domain string) error {
@@ -144,37 +217,21 @@ func RemoveCaddyApp(domain string) error {
 		return err
 	}
 
-	lines := strings.Split(string(data), "\n")
-	var result []string
-	skip := false
-	depth := 0
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !skip && (trimmed == domain+" {" || trimmed == domain+"{") {
-			skip = true
-			depth = 1
-			continue
-		}
-		if skip {
-			depth += strings.Count(line, "{") - strings.Count(line, "}")
-			if depth <= 0 {
-				skip = false
-			}
-			continue
-		}
-		result = append(result, line)
-	}
-
-	return os.WriteFile(caddyfilePath, []byte(strings.Join(result, "\n")), 0644)
+	filtered := filterCaddyDomain(string(data), domain)
+	return atomicWriteFile(caddyfilePath, []byte(filtered), 0644)
 }
 
 func ReloadCaddy() error {
-	cmd := exec.Command("docker", "exec", "qd-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
+	ctx, cancel := context.WithTimeout(context.Background(), proxyExecTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "exec", "qd-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile")
 	return cmd.Run()
 }
 
 func StopCaddy() error {
-	cmd := exec.Command("docker", "compose", "down")
+	ctx, cancel := context.WithTimeout(context.Background(), proxyExecTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "compose", "down")
 	cmd.Dir = getProxyDir()
 	return cmd.Run()
 }
