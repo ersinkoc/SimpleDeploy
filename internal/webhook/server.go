@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -164,10 +165,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rate limiting
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx > 0 {
-		ip = ip[:idx]
-	}
+	ip := clientIP(r.RemoteAddr)
 	if !s.limiter.allow(ip) {
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)
 		return
@@ -296,4 +294,28 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
+}
+
+// clientIP normalises an http.Request.RemoteAddr value into a bare host
+// suitable for use as a rate-limiter key. The previous implementation used
+// strings.LastIndex(":") which left the brackets on IPv6 addresses
+// ("[::1]:1234" → "[::1]") and silently mis-split addresses without a port.
+// net.SplitHostPort understands both v4 host:port and v6 [host]:port forms;
+// when it fails (no port present, malformed) we fall back to the raw value
+// so a misshaped RemoteAddr still gets rate-limited rather than being
+// silently lumped into one bucket.
+func clientIP(remoteAddr string) string {
+	if remoteAddr == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	// SplitHostPort failed — could be a bare IPv6 without port, or a string
+	// that already contains no port. Strip surrounding brackets if present
+	// so "[::1]" and "::1" hash to the same bucket.
+	if strings.HasPrefix(remoteAddr, "[") && strings.HasSuffix(remoteAddr, "]") {
+		return remoteAddr[1 : len(remoteAddr)-1]
+	}
+	return remoteAddr
 }

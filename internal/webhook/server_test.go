@@ -247,3 +247,39 @@ func TestHandleWebhook_EmptyBranch(t *testing.T) {
 		t.Error("Deploy handler should have been called for tag push with empty branch")
 	}
 }
+
+func TestClientIP(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"empty", "", ""},
+		{"ipv4 with port", "192.168.1.1:54321", "192.168.1.1"},
+		{"ipv6 bracketed with port", "[::1]:8080", "::1"},
+		{"ipv6 full bracketed with port", "[2001:db8::1]:443", "2001:db8::1"},
+		{"ipv6 bracketed no port", "[::1]", "::1"},
+		{"ipv4 only no port", "10.0.0.5", "10.0.0.5"},
+		{"ipv6 bare no port no brackets", "fe80::1", "fe80::1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clientIP(tt.remoteAddr); got != tt.want {
+				t.Errorf("clientIP(%q) = %q, want %q", tt.remoteAddr, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClientIP_BracketStripConsistency confirms that the bracketed and
+// non-bracketed forms of the same IPv6 address normalise to the same
+// rate-limiter key — the prior LastIndex-based approach left the brackets
+// in for the "[host]" no-port case while stripping them from the
+// "[host]:port" case, splitting the bucket.
+func TestClientIP_BracketStripConsistency(t *testing.T) {
+	withPort := clientIP("[::1]:8080")
+	noPort := clientIP("[::1]")
+	if withPort != noPort {
+		t.Errorf("bracketed v6 with/without port should match: %q vs %q", withPort, noPort)
+	}
+}

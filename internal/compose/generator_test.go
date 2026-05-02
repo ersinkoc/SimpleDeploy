@@ -3,6 +3,7 @@ package compose
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -217,6 +218,28 @@ func TestWriteCompose(t *testing.T) {
 	}
 	if string(data) != content {
 		t.Errorf("Written content doesn't match")
+	}
+}
+
+// TestWriteCompose_Mode0600 confirms the generated docker-compose.yml is
+// written with owner-only perms — the YAML embeds DB root passwords directly
+// in the database services' environment block, so a world-readable file
+// would leak credentials to other users on the host. Skipped on Windows
+// because Go's os.FileMode does not faithfully reflect Windows ACLs.
+func TestWriteCompose_Mode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file modes are not POSIX on Windows")
+	}
+	dir := t.TempDir()
+	if err := WriteCompose(dir, "services: {}\n"); err != nil {
+		t.Fatalf("WriteCompose failed: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("docker-compose.yml mode = %#o, want 0600 — file may carry DB credentials", got)
 	}
 }
 

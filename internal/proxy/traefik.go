@@ -47,7 +47,11 @@ func SetupTraefik(acmeEmail string) error {
 	// Write .env for ACME email
 	envPath := filepath.Join(getProxyDir(), ".env")
 	envContent := fmt.Sprintf("ACME_EMAIL=%s\n", acmeEmail)
-	if err := osWriteFile(envPath, []byte(envContent), 0644); err != nil {
+	// 0600 — the file lives next to compose YAML and contains the operator's
+	// email; not a credential per se, but env files are an acknowledged
+	// secrets-carrying convention (the per-app .env is also 0600), so we keep
+	// the mode tight rather than diverge.
+	if err := osWriteFile(envPath, []byte(envContent), 0600); err != nil {
 		return fmt.Errorf("failed to write proxy .env: %w", err)
 	}
 

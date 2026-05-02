@@ -394,3 +394,136 @@ func TestValidateEnvKey_Invalid(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDBType_Valid(t *testing.T) {
+	// Covers every type currently in db/provisioner.go's databaseDefs map.
+	types := []string{"mysql", "postgresql", "mariadb", "mongodb", "redis", "x", "x99"}
+	for _, ty := range types {
+		t.Run(ty, func(t *testing.T) {
+			if err := ValidateDBType(ty); err != nil {
+				t.Errorf("ValidateDBType(%q) should succeed, got: %v", ty, err)
+			}
+		})
+	}
+}
+
+func TestValidateDBType_Invalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"uppercase", "MySQL"},
+		{"leading digit", "9mysql"},
+		{"hyphen", "my-sql"},
+		{"underscore", "my_sql"},
+		{"dot", "my.sql"},
+		{"slash", "my/sql"},
+		{"space", "my sql"},
+		{"newline", "mysql\n"},
+		{"backtick", "mysql`"},
+		{"shell metachar", "mysql;rm"},
+		{"too long", strings.Repeat("a", 33)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateDBType(tt.input); err == nil {
+				t.Errorf("ValidateDBType(%q) should fail", tt.input)
+			}
+		})
+	}
+}
+
+func TestValidateContainerPath_Valid(t *testing.T) {
+	// Covers every Volume value currently in db/provisioner.go's databaseDefs.
+	paths := []string{
+		"/var/lib/mysql",
+		"/var/lib/postgresql/data",
+		"/data/db",
+		"/data",
+		"/a",
+		"/some/deep/nested/path-with-dashes/and_underscores",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			if err := ValidateContainerPath(p); err != nil {
+				t.Errorf("ValidateContainerPath(%q) should succeed, got: %v", p, err)
+			}
+		})
+	}
+}
+
+func TestValidateContainerPath_Invalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"relative", "var/lib/mysql"},
+		{"home expansion", "~/data"},
+		{"parent traversal", "/var/../etc"},
+		{"trailing parent traversal", "/data/.."},
+		{"space", "/var/lib mysql"},
+		{"newline", "/var/lib\n"},
+		{"backtick", "/var/`whoami`"},
+		{"semicolon", "/var/lib;rm"},
+		{"glob star", "/var/*"},
+		{"glob question", "/var/?"},
+		{"backslash", "/var\\lib"},
+		{"colon", "/var:lib"},
+		{"dollar", "/var/$HOME"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateContainerPath(tt.input); err == nil {
+				t.Errorf("ValidateContainerPath(%q) should fail", tt.input)
+			}
+		})
+	}
+}
+
+func TestValidateVolumeName_Valid(t *testing.T) {
+	// Covers the actual format produced by db.ProvisionDatabases:
+	// "qd-{appName}-{dbType}-data".
+	names := []string{
+		"qd-myapp-mysql-data",
+		"qd-app-postgresql-data",
+		"a",
+		"my_volume",
+		"v1.2.3",
+		"Volume_Name-99",
+	}
+	for _, n := range names {
+		t.Run(n, func(t *testing.T) {
+			if err := ValidateVolumeName(n); err != nil {
+				t.Errorf("ValidateVolumeName(%q) should succeed, got: %v", n, err)
+			}
+		})
+	}
+}
+
+func TestValidateVolumeName_Invalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"leading hyphen", "-myvol"},
+		{"leading dot", ".myvol"},
+		{"leading underscore", "_myvol"},
+		{"slash", "my/vol"},
+		{"space", "my vol"},
+		{"newline", "myvol\n"},
+		{"backtick", "myvol`"},
+		{"colon", "my:vol"},
+		{"yaml break", "my\"vol"},
+		{"too long", strings.Repeat("a", 256)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateVolumeName(tt.input); err == nil {
+				t.Errorf("ValidateVolumeName(%q) should fail", tt.input)
+			}
+		})
+	}
+}

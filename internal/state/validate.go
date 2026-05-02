@@ -244,3 +244,87 @@ func ValidateEnvKey(key string) error {
 	}
 	return nil
 }
+
+// dbTypeRegex codifies the format of a database type identifier as it lands
+// in compose YAML — service names ("qd-app-{type}"), container names, and
+// the depends_on key. We deliberately do NOT enumerate the supported set
+// here (mysql/postgresql/...) because that lookup belongs to the db
+// provisioner; this validator's job is only to ensure the string is safe to
+// interpolate. Lowercase ASCII only — the provisioner's static map keys are
+// all lowercase.
+var dbTypeRegex = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
+
+// ValidateDBType is a defense-in-depth check on values interpolated into
+// compose service names ("qd-%s-%s") and the depends_on map. The actual
+// supported-database lookup happens in db.GetDatabaseConfig — this only
+// guards the string form. A state file naming an unknown type with
+// metacharacters would otherwise reach compose.Generate before failing.
+func ValidateDBType(t string) error {
+	if t == "" {
+		return fmt.Errorf("database type cannot be empty")
+	}
+	if len(t) > 32 {
+		return fmt.Errorf("database type too long (max 32)")
+	}
+	if !dbTypeRegex.MatchString(t) {
+		return fmt.Errorf("invalid database type %q (must match [a-z][a-z0-9]*)", t)
+	}
+	return nil
+}
+
+// containerPathRegex matches an absolute Linux path with the conservative
+// alphabet we actually emit in databaseDefs ("/var/lib/mysql", "/data/db",
+// "/var/lib/postgresql/data"). Spaces, glob metachars, quotes, and shell
+// operators are rejected so the value is safe to interpolate into
+// "volumes: - name:%s" without further escaping.
+var containerPathRegex = regexp.MustCompile(`^/[A-Za-z0-9_./\-]*$`)
+
+// ValidateContainerPath checks a container-side mount path. The values
+// originate from a hardcoded map in db/provisioner.go, so a violation here
+// means the state file or the map was tampered with — fail loudly rather
+// than silently emit a malformed compose file. Rejects `..` segments and
+// any of the metacharacters that could break out of a YAML scalar.
+func ValidateContainerPath(p string) error {
+	if p == "" {
+		return fmt.Errorf("container path cannot be empty")
+	}
+	if len(p) > 4096 {
+		return fmt.Errorf("container path too long (max 4096)")
+	}
+	if !strings.HasPrefix(p, "/") {
+		return fmt.Errorf("container path must be absolute (start with '/')")
+	}
+	if !containerPathRegex.MatchString(p) {
+		return fmt.Errorf("container path contains invalid characters")
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return fmt.Errorf("container path must not contain '..' segments")
+		}
+	}
+	return nil
+}
+
+// volumeNameRegex follows Docker's documented volume-name grammar:
+// "[a-zA-Z0-9][a-zA-Z0-9_.-]+". We require a non-empty character after the
+// leading alphanumeric (the {1,254} below) so single-character names — which
+// Docker actually accepts as well — are still allowed.
+var volumeNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,254}$`)
+
+// ValidateVolumeName guards the named-volume identifier emitted into
+// "volumes: - %s:..." and the top-level volumes block. The provisioner
+// builds it as "qd-{appName}-{dbType}-data" from values both validated
+// upstream, so this is defense-in-depth: a state file with a hand-edited
+// VolumeName must still be safe to interpolate.
+func ValidateVolumeName(name string) error {
+	if name == "" {
+		return fmt.Errorf("volume name cannot be empty")
+	}
+	if len(name) > 255 {
+		return fmt.Errorf("volume name too long (max 255)")
+	}
+	if !volumeNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid volume name %q (must match [a-zA-Z0-9][a-zA-Z0-9_.-]*)", name)
+	}
+	return nil
+}

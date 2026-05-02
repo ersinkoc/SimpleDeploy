@@ -715,6 +715,34 @@ func TestSetupTraefik_WriteEnvError(t *testing.T) {
 	}
 }
 
+// TestSetupTraefik_EnvFileMode0600 confirms the proxy's ACME .env is written
+// with owner-only perms. The file currently only contains ACME_EMAIL, but env
+// files are an acknowledged secrets-carrying convention so we keep the mode
+// tight to avoid future leakage if more values are added. Captured via the
+// osWriteFile indirection so it works on Windows too.
+func TestSetupTraefik_EnvFileMode0600(t *testing.T) {
+	setupTestProxyDir(t)
+
+	old := osWriteFile
+	captured := map[string]os.FileMode{}
+	osWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		captured[filepath.Base(name)] = perm
+		return os.WriteFile(name, data, perm)
+	}
+	defer func() { osWriteFile = old }()
+
+	// SetupTraefik will fail at the docker-network step in unit tests without
+	// Docker installed; we only care about the perm passed to the .env write,
+	// which happens before that.
+	_ = SetupTraefik("test@test.com")
+
+	if perm, ok := captured[".env"]; !ok {
+		t.Fatal("SetupTraefik did not write .env")
+	} else if perm != 0600 {
+		t.Errorf("proxy .env mode = %#o, want 0600", perm)
+	}
+}
+
 func TestSetupTraefik_CreateNetworkError(t *testing.T) {
 	setupTestProxyDir(t)
 
