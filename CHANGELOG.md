@@ -2,7 +2,7 @@
 
 All notable changes to SimpleDeploy will be documented in this file.
 
-## [0.0.7] - 2026-04-03
+## [0.0.7] - 2026-05-03
 
 ### Security
 - YAML injection prevention: repo URL and branch now properly quoted in compose labels
@@ -10,12 +10,21 @@ All notable changes to SimpleDeploy will be documented in this file.
 - Environment variable key validation (must match `[A-Za-z_][A-Za-z0-9_]*`)
 - IP extraction panic safety in webhook server
 - Deep copy returned from `GetApp` to prevent shared mutable state race conditions
+- Fail-closed credential encryption: any AES-256-GCM error aborts `RunDeploy` instead of falling back to plaintext
+- File mode tightening: proxy `.env` files written at 0600, configs at 0644/0755
+- IPv6 rate-limit key fix: `X-Forwarded-For` with IPv6 no longer produces malformed limiter keys
+- Database compose field validation: rejects empty engine, name, or version before generating YAML
+- Header-name validation in proxy paths: rejects empty names and names containing colons
+- Duplicate prevention: `RunDeploy` skips redundant builds when image hash is unchanged; Caddy/Traefik proxy configs deduplicate on redeploy
 
 ### Reliability
 - MongoDB connection string fixed (missing database name in template)
 - Webhook deploy goroutine leak fixed (timeout now waits for inner goroutine)
 - Lock timeout increased 5s → 30s to prevent false stale detection on slow I/O
 - Caddy block removal now tracks brace depth to correctly handle nested blocks
+- Context propagation end-to-end: webhook timeout signals now propagate into `git pull`, `docker build`, and `docker compose up` subprocesses
+- Proxy setup bounded by `proxySetupTimeout` (5 min) and `proxyExecTimeout` (30 s) to prevent wedged-Docker hangs
+- Atomic Caddyfile writes via temp-file + rename to prevent partial config corruption
 
 ### Bug Fixes
 - Node.js Dockerfile now properly fails on build errors (removed `|| true`)
@@ -29,6 +38,7 @@ All notable changes to SimpleDeploy will be documented in this file.
 
 ### Code Quality
 - Dead code removal in `detectNodePort`
+- Comprehensive mock signature updates across all packages for ctx-aware testing
 
 ## [0.0.6] - 2026-04-02
 
