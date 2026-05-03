@@ -26,7 +26,7 @@ SimpleDeploy is a zero-external-dependency PaaS tool written in Go. Provide a Gi
 - **Encrypted secrets** — AES-256-GCM encryption for tokens and passwords.
 - **Security headers** — Automatic security headers on every app.
 - **Service mode** — Run SimpleDeploy itself as a Docker container.
-- **Zero-downtime** — Rolling deploys with health checks.
+- **Health-checked deploys** — Database containers start with health checks and service dependency ordering.
 
 ## Quick Start
 
@@ -161,12 +161,19 @@ docker build -t simpledeploy:latest .
 
 ## Security
 
-- Git tokens and DB passwords encrypted with AES-256-GCM
+- Git tokens and DB passwords encrypted with AES-256-GCM (fail-closed: any crypto error aborts the operation)
 - Machine-id-based encryption key
 - HMAC-SHA256 webhook verification (GitHub, Gitea)
 - Token-based webhook verification (GitLab)
 - Automatic security headers on every application
+- Input validation at all boundaries: domains, emails, header names, environment variable keys, proxy paths
+- IPv6-safe rate limiting
+- Atomic proxy config writes prevent partial corruption
 - Docker socket access restricted to SimpleDeploy container
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
 
 ## Author
 
