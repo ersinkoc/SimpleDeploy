@@ -579,9 +579,8 @@ On each deploy, regenerate Caddyfile + `docker exec qd-caddy caddy reload`.
 # SSH into server
 ssh root@server
 
-# Download the latest release (Linux amd64 — adjust OS/arch as needed)
-curl -L -o simpledeploy https://github.com/ersinkoc/SimpleDeploy/releases/latest/download/simpledeploy-linux-amd64
-chmod +x simpledeploy
+# Install latest release (auto-detects OS/arch)
+curl -fsSL https://raw.githubusercontent.com/ersinkoc/SimpleDeploy/main/install.sh | sh
 sudo mv simpledeploy /usr/local/bin/
 
 # First-time setup
