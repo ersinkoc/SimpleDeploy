@@ -42,7 +42,7 @@ func mockGitCloneFromDir(t *testing.T, repoDir string) {
 	t.Helper()
 	origGitClone := gitClone
 	t.Cleanup(func() { gitClone = origGitClone })
-	gitClone = func(repo, branch, dest, token string) error {
+	gitClone = func(ctx context.Context, repo, branch, dest, token string) error {
 		if err := os.MkdirAll(dest, 0755); err != nil {
 			return err
 		}
@@ -106,10 +106,10 @@ func mockDeploySuccess() func() {
 	oldStatus := dockerContainerStatus
 	oldBuildpack := buildpackWriteDockerfile
 
-	dockerBuildImage = func(dir, name string) (string, error) { return "test:v1", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "test:v1", nil }
 	composeWriteCompose = func(dir, content string) error { return nil }
-	dockerComposeUp = func(dir string) error { return nil }
-	dockerContainerStatus = func(name string) (string, error) { return "running", nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
+	dockerContainerStatus = func(ctx context.Context, name string) (string, error) { return "running", nil }
 	buildpackWriteDockerfile = func(dir, appType string) error { return nil }
 
 	return func() {
@@ -265,7 +265,7 @@ func TestRunInit_SetupCaddyError(t *testing.T) {
 
 func TestRunRestart_Success(t *testing.T) {
 	old := dockerRestartContainer
-	dockerRestartContainer = func(name string) error { return nil }
+	dockerRestartContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerRestartContainer = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -283,7 +283,7 @@ func TestRunRestart_Success(t *testing.T) {
 
 func TestRunRestart_DockerError(t *testing.T) {
 	old := dockerRestartContainer
-	dockerRestartContainer = func(name string) error { return errors.New("fail") }
+	dockerRestartContainer = func(ctx context.Context, name string) error { return errors.New("fail") }
 	defer func() { dockerRestartContainer = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -297,7 +297,7 @@ func TestRunRestart_DockerError(t *testing.T) {
 
 func TestRunRestart_StateGetError(t *testing.T) {
 	oldRestart := dockerRestartContainer
-	dockerRestartContainer = func(name string) error { return nil }
+	dockerRestartContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerRestartContainer = oldRestart }()
 	oldGet := stateGetApp
 	calls := 0
@@ -318,7 +318,7 @@ func TestRunRestart_StateGetError(t *testing.T) {
 
 func TestRunRestart_StateSaveError(t *testing.T) {
 	oldRestart := dockerRestartContainer
-	dockerRestartContainer = func(name string) error { return nil }
+	dockerRestartContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerRestartContainer = oldRestart }()
 	oldSave := stateSaveApp
 	stateSaveApp = func(app *state.AppConfig) error { return errors.New("fail") }
@@ -337,7 +337,7 @@ func TestRunRestart_StateSaveError(t *testing.T) {
 
 func TestRunStop_Success(t *testing.T) {
 	old := dockerStopContainer
-	dockerStopContainer = func(name string) error { return nil }
+	dockerStopContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerStopContainer = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -355,7 +355,7 @@ func TestRunStop_Success(t *testing.T) {
 
 func TestRunStop_DockerError(t *testing.T) {
 	old := dockerStopContainer
-	dockerStopContainer = func(name string) error { return errors.New("fail") }
+	dockerStopContainer = func(ctx context.Context, name string) error { return errors.New("fail") }
 	defer func() { dockerStopContainer = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -369,7 +369,7 @@ func TestRunStop_DockerError(t *testing.T) {
 
 func TestRunStop_StateGetError(t *testing.T) {
 	oldStop := dockerStopContainer
-	dockerStopContainer = func(name string) error { return nil }
+	dockerStopContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerStopContainer = oldStop }()
 	oldGet := stateGetApp
 	calls := 0
@@ -390,7 +390,7 @@ func TestRunStop_StateGetError(t *testing.T) {
 
 func TestRunStop_StateSaveError(t *testing.T) {
 	oldStop := dockerStopContainer
-	dockerStopContainer = func(name string) error { return nil }
+	dockerStopContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerStopContainer = oldStop }()
 	oldSave := stateSaveApp
 	stateSaveApp = func(app *state.AppConfig) error { return errors.New("fail") }
@@ -415,7 +415,7 @@ func TestRunExec_TooFewArgs(t *testing.T) {
 
 func TestRunExec_Success(t *testing.T) {
 	old := dockerExecContainer
-	dockerExecContainer = func(name string, args ...string) error { return nil }
+	dockerExecContainer = func(ctx context.Context, name string, args ...string) error { return nil }
 	defer func() { dockerExecContainer = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -429,7 +429,7 @@ func TestRunExec_Success(t *testing.T) {
 
 func TestRunLogs_Success(t *testing.T) {
 	old := dockerComposeLogs
-	dockerComposeLogs = func(dir, svc string, follow bool) error { return nil }
+	dockerComposeLogs = func(ctx context.Context, dir, svc string, follow bool) error { return nil }
 	defer func() { dockerComposeLogs = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -524,7 +524,7 @@ func TestRunRemove_Success(t *testing.T) {
 	app.Domain = "rmsuccess.example.com"
 	state.SaveApp(app)
 	oldRemove := dockerComposeRemove
-	dockerComposeRemove = func(appDir string, vols bool) error { return nil }
+	dockerComposeRemove = func(ctx context.Context, appDir string, vols bool) error { return nil }
 	defer func() { dockerComposeRemove = oldRemove }()
 	setWizardInput(t, "y\n")
 	_ = captureStdout(func() {
@@ -543,7 +543,7 @@ func TestRunRemove_StateRemoveError(t *testing.T) {
 	app.Domain = "rmstateerr.example.com"
 	state.SaveApp(app)
 	oldRemove := dockerComposeRemove
-	dockerComposeRemove = func(appDir string, vols bool) error { return nil }
+	dockerComposeRemove = func(ctx context.Context, appDir string, vols bool) error { return nil }
 	defer func() { dockerComposeRemove = oldRemove }()
 	oldStateRemove := stateRemoveApp
 	stateRemoveApp = func(name string) error { return errors.New("fail") }
@@ -565,7 +565,7 @@ func TestRunRemove_DirRemoveError(t *testing.T) {
 	app.Domain = "rmdirerr.example.com"
 	state.SaveApp(app)
 	oldRemove := dockerComposeRemove
-	dockerComposeRemove = func(appDir string, vols bool) error { return nil }
+	dockerComposeRemove = func(ctx context.Context, appDir string, vols bool) error { return nil }
 	defer func() { dockerComposeRemove = oldRemove }()
 	oldOsRemove := osRemoveAll
 	osRemoveAll = func(path string) error { return errors.New("fail") }
@@ -587,7 +587,7 @@ func TestRunRemove_Caddy(t *testing.T) {
 	app.Domain = "rmcaddy.example.com"
 	state.SaveApp(app)
 	oldRemove := dockerComposeRemove
-	dockerComposeRemove = func(appDir string, vols bool) error { return nil }
+	dockerComposeRemove = func(ctx context.Context, appDir string, vols bool) error { return nil }
 	defer func() { dockerComposeRemove = oldRemove }()
 	setWizardInput(t, "y\n")
 	_ = captureStdout(func() {
@@ -606,10 +606,10 @@ func TestRunRemove_ImageCleanupPanic(t *testing.T) {
 	app.Domain = "panicrm.example.com"
 	state.SaveApp(app)
 	oldRemove := dockerComposeRemove
-	dockerComposeRemove = func(appDir string, vols bool) error { return nil }
+	dockerComposeRemove = func(ctx context.Context, appDir string, vols bool) error { return nil }
 	defer func() { dockerComposeRemove = oldRemove }()
 	oldCleanup := dockerCleanupOldImages
-	dockerCleanupOldImages = func(appName string, keep int) error { panic("boom") }
+	dockerCleanupOldImages = func(ctx context.Context, appName string, keep int) error { panic("boom") }
 	defer func() { dockerCleanupOldImages = oldCleanup }()
 	setWizardInput(t, "y\n")
 	_ = captureStdout(func() {
@@ -642,7 +642,7 @@ func TestRunDeploy_BuildFailure(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\nCMD [\"sleep\", \"60\"]\n"})
 	initGitRepo(t, repoDir)
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "", errors.New("build failed") }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "", errors.New("build failed") }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldRemoveAll := osRemoveAll
 	removed := false
@@ -684,7 +684,7 @@ func TestRunDeploy_ComposeWriteError(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\nCMD [\"sleep\", \"60\"]\n"})
 	initGitRepo(t, repoDir)
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "test:v1", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "test:v1", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeWrite := composeWriteCompose
 	composeWriteCompose = func(dir, content string) error { return errors.New("fail") }
@@ -701,16 +701,16 @@ func TestRunDeploy_ComposeUpError(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\nCMD [\"sleep\", \"60\"]\n"})
 	initGitRepo(t, repoDir)
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "test:v1", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "test:v1", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeWrite := composeWriteCompose
 	composeWriteCompose = func(dir, content string) error { return nil }
 	defer func() { composeWriteCompose = oldComposeWrite }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return errors.New("up fail") }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return errors.New("up fail") }
 	defer func() { dockerComposeUp = oldComposeUp }()
 	oldComposeDown := dockerComposeDown
-	dockerComposeDown = func(dir string) error { return nil }
+	dockerComposeDown = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeDown = oldComposeDown }()
 	setWizardInput(t, deployInputBasic(repoDir, "7", "composeuperr", "y"))
 	_ = captureStdout(func() {
@@ -724,16 +724,16 @@ func TestRunDeploy_ComposeUpRollbackFail(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\nCMD [\"sleep\", \"60\"]\n"})
 	initGitRepo(t, repoDir)
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "test:v1", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "test:v1", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeWrite := composeWriteCompose
 	composeWriteCompose = func(dir, content string) error { return nil }
 	defer func() { composeWriteCompose = oldComposeWrite }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return errors.New("up fail") }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return errors.New("up fail") }
 	defer func() { dockerComposeUp = oldComposeUp }()
 	oldComposeDown := dockerComposeDown
-	dockerComposeDown = func(dir string) error { return errors.New("down fail") }
+	dockerComposeDown = func(ctx context.Context, dir string) error { return errors.New("down fail") }
 	defer func() { dockerComposeDown = oldComposeDown }()
 	setWizardInput(t, deployInputBasic(repoDir, "7", "rollbackfail", "y"))
 	_ = captureStdout(func() {
@@ -747,16 +747,16 @@ func TestRunDeploy_ContainerNotRunning(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\nCMD [\"sleep\", \"60\"]\n"})
 	initGitRepo(t, repoDir)
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "test:v1", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "test:v1", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeWrite := composeWriteCompose
 	composeWriteCompose = func(dir, content string) error { return nil }
 	defer func() { composeWriteCompose = oldComposeWrite }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
 	oldStatus := dockerContainerStatus
-	dockerContainerStatus = func(name string) (string, error) { return "exited", nil }
+	dockerContainerStatus = func(ctx context.Context, name string) (string, error) { return "exited", nil }
 	defer func() { dockerContainerStatus = oldStatus }()
 	setWizardInput(t, deployInputBasic(repoDir, "7", "notrunning", "y"))
 	_ = captureStdout(func() {
@@ -1263,13 +1263,13 @@ func TestRunRedeploy_Success(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  redeployok:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "redeployok:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "redeployok:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
 
 	_ = captureStdout(func() {
@@ -1307,13 +1307,13 @@ func TestRunRedeploy_GitTokenDecryptFail(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  tokendeploy:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "tokendeploy:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "tokendeploy:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
 
 	_ = captureStdout(func() {
@@ -1350,10 +1350,10 @@ func TestRunRedeploy_BuildFail(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  buildfail:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "", errors.New("build fail") }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "", errors.New("build fail") }
 	defer func() { dockerBuildImage = oldBuild }()
 
 	_ = captureStdout(func() {
@@ -1390,10 +1390,10 @@ func TestRunRedeploy_ComposeWriteFail(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  composewritefail:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "cf:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "cf:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldWrite := osWriteFile
 	osWriteFile = func(name string, data []byte, perm os.FileMode) error { return errors.New("fail") }
@@ -1433,13 +1433,13 @@ func TestRunRedeploy_ComposeUpFail(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  composeupfail:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "cuf:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "cuf:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return errors.New("up fail") }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return errors.New("up fail") }
 	defer func() { dockerComposeUp = oldComposeUp }()
 
 	_ = captureStdout(func() {
@@ -1473,10 +1473,10 @@ func TestRunRedeploy_ReadComposeFail(t *testing.T) {
 	exec.Command("git", "commit", "-m", "initial").Dir = sourceDir
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "nr:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "nr:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 
 	_ = captureStdout(func() {
@@ -1513,16 +1513,16 @@ func TestRunRedeploy_ImageCleanupPanic(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  panicre:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "pr:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "pr:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
 	oldCleanup := dockerCleanupOldImages
-	dockerCleanupOldImages = func(appName string, keep int) error { panic("boom") }
+	dockerCleanupOldImages = func(ctx context.Context, appName string, keep int) error { panic("boom") }
 	defer func() { dockerCleanupOldImages = oldCleanup }()
 
 	_ = captureStdout(func() {
@@ -1560,13 +1560,13 @@ func TestRunRedeploy_CaddyReloadError(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  caddyreloaderr:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "cre:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "cre:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
 	oldReload := proxyReloadCaddy
 	proxyReloadCaddy = func() error { return errors.New("reload fail") }
@@ -1606,13 +1606,13 @@ func TestRunRedeploy_SaveAppError(t *testing.T) {
 	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  savefail:\n    image: old\n"), 0644)
 
 	oldPull := gitPull
-	gitPull = func(dir, branch string, token ...string) error { return nil }
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error { return nil }
 	defer func() { gitPull = oldPull }()
 	oldBuild := dockerBuildImage
-	dockerBuildImage = func(dir, name string) (string, error) { return "sf:v2", nil }
+	dockerBuildImage = func(ctx context.Context, dir, name string) (string, error) { return "sf:v2", nil }
 	defer func() { dockerBuildImage = oldBuild }()
 	oldComposeUp := dockerComposeUp
-	dockerComposeUp = func(dir string) error { return nil }
+	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
 	oldSave := stateSaveApp
 	stateSaveApp = func(app *state.AppConfig) error { return errors.New("save fail") }

@@ -68,7 +68,7 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 
 	// Pull latest
 	wizard.Info("Pulling latest changes...")
-	if err := gitPull(sourceDir, app.Branch, gitToken); err != nil {
+	if err := gitPull(ctx, sourceDir, app.Branch, gitToken); err != nil {
 		return fmt.Errorf("git pull failed: %w", err)
 	}
 	wizard.Success("Repository updated")
@@ -79,7 +79,7 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 
 	// Build new image
 	wizard.Info("Building new image...")
-	imageTag, err := dockerBuildImage(sourceDir, appName)
+	imageTag, err := dockerBuildImage(ctx, sourceDir, appName)
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -104,7 +104,7 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 
 	// Restart
 	wizard.Info("Restarting containers...")
-	if err := dockerComposeUp(appDir); err != nil {
+	if err := dockerComposeUp(ctx, appDir); err != nil {
 		return fmt.Errorf("failed to restart: %w", err)
 	}
 	wizard.Success("Containers restarted")
@@ -129,7 +129,7 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
 			}
 		}()
-		dockerCleanupOldImages(appName, 3)
+		dockerCleanupOldImages(ctx, appName, 3)
 	}()
 
 	// Update state

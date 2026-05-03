@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
@@ -20,7 +21,7 @@ func RunStop(args []string) error {
 
 	containerName := docker.ContainerName(appName)
 	wizard.Info(fmt.Sprintf("Stopping %s...", appName))
-	if err := dockerStopContainer(containerName); err != nil {
+	if err := dockerStopContainer(context.Background(), containerName); err != nil {
 		return fmt.Errorf("failed to stop %s: %w", appName, err)
 	}
 	wizard.Success(fmt.Sprintf("App %s stopped", appName))

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,7 +89,7 @@ func RunDeploy() error {
 		}
 	}
 
-	if err := gitClone(app.Repo, app.Branch, sourceDir, gitToken); err != nil {
+	if err := gitClone(context.Background(), app.Repo, app.Branch, sourceDir, gitToken); err != nil {
 		return fmt.Errorf("git clone failed: %w", err)
 	}
 	wizard.Success("Repository cloned")
@@ -299,7 +300,7 @@ func RunDeploy() error {
 
 	// Build image
 	wizard.Info("Building Docker image...")
-	imageTag, err := dockerBuildImage(sourceDir, app.Name)
+	imageTag, err := dockerBuildImage(context.Background(), sourceDir, app.Name)
 	if err != nil {
 		// Clean up app directory on build failure (contains .env with credentials)
 		osRemoveAll(appDir)
@@ -321,10 +322,10 @@ func RunDeploy() error {
 
 	// Start containers
 	wizard.Info("Starting containers...")
-	if err := dockerComposeUp(appDir); err != nil {
+	if err := dockerComposeUp(context.Background(), appDir); err != nil {
 		wizard.Warn("Failed to start containers. Rolling back...")
 		// Attempt rollback: remove compose and clean up
-		if downErr := dockerComposeDown(appDir); downErr != nil {
+		if downErr := dockerComposeDown(context.Background(), appDir); downErr != nil {
 			wizard.Warn("Rollback cleanup also failed: " + downErr.Error())
 		}
 		return fmt.Errorf("failed to start containers: %w", err)
@@ -334,7 +335,7 @@ func RunDeploy() error {
 	// Verify container is actually running
 	containerName := docker.ContainerName(app.Name)
 	time.Sleep(2 * time.Second)
-	containerStatus, _ := dockerContainerStatus(containerName)
+	containerStatus, _ := dockerContainerStatus(context.Background(), containerName)
 	if containerStatus != "running" {
 		wizard.Warn(fmt.Sprintf("Container %s is %q (expected running). Check logs with 'simpledeploy logs %s'", containerName, containerStatus, app.Name))
 		app.Status = "error"

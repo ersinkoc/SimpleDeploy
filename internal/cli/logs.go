@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
@@ -18,7 +19,7 @@ func RunLogs(args []string) error {
 
 	appDir := cfgpkg.AppDir(appName)
 
-	if err := dockerComposeLogs(appDir, appName, true); err != nil {
+	if err := dockerComposeLogs(context.Background(), appDir, appName, true); err != nil {
 		return fmt.Errorf("failed to get logs: %w", err)
 	}
 

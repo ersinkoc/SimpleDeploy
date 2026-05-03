@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,12 +15,12 @@ var (
 	osWriteFile  = os.WriteFile
 )
 
-func Clone(repoURL, branch, destDir, token string) error {
+func Clone(ctx context.Context, repoURL, branch, destDir, token string) error {
 	if err := osMkdirAll(filepath.Dir(destDir), 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	cmd := exec.Command("git", "clone", "--branch", branch, "--single-branch", "--depth", "1", repoURL, destDir)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--branch", branch, "--single-branch", "--depth", "1", repoURL, destDir)
 	if token != "" {
 		// Use GIT_ASKPASS to avoid token in process args
 		askpass, cleanup, err := writeAskpassScript(token)
@@ -43,8 +44,8 @@ func Clone(repoURL, branch, destDir, token string) error {
 	return nil
 }
 
-func Pull(repoDir, branch string, token ...string) error {
-	cmd := exec.Command("git", "-C", repoDir, "pull", "origin", branch)
+func Pull(ctx context.Context, repoDir, branch string, token ...string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoDir, "pull", "origin", branch)
 	if len(token) > 0 && token[0] != "" {
 		askpass, cleanup, err := writeAskpassScript(token[0])
 		if err != nil {

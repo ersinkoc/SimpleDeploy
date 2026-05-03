@@ -58,7 +58,7 @@ func TestBuildImage_Timeout(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	_, err := BuildImage("/tmp", "app")
+	_, err := BuildImage(context.Background(), "/tmp", "app")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("Expected timeout error, got %v", err)
 	}
@@ -71,7 +71,7 @@ func TestBuildImage_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	_, err := BuildImage("/tmp", "app")
+	_, err := BuildImage(context.Background(), "/tmp", "app")
 	if err == nil || !strings.Contains(err.Error(), "docker build failed") {
 		t.Fatalf("Expected build error, got %v", err)
 	}
@@ -84,7 +84,7 @@ func TestListImages_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	_, err := ListImages("app")
+	_, err := ListImages(context.Background(), "app")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -97,7 +97,7 @@ func TestCleanupOldImages_ListError(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := CleanupOldImages("app", 1)
+	err := CleanupOldImages(context.Background(), "app", 1)
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -122,7 +122,7 @@ func TestCleanupOldImages_RemoveError(t *testing.T) {
 	defer func() { newDockerCmdContext = oldTag }()
 
 	// Should not return error; just prints warning
-	err := CleanupOldImages("app", 0)
+	err := CleanupOldImages(context.Background(), "app", 0)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -139,7 +139,7 @@ func TestComposeUp_Timeout(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeUp("/tmp")
+	err := ComposeUp(context.Background(), "/tmp")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("Expected timeout error, got %v", err)
 	}
@@ -152,7 +152,7 @@ func TestComposeUp_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeUp("/tmp")
+	err := ComposeUp(context.Background(), "/tmp")
 	if err == nil || !strings.Contains(err.Error(), "docker compose up failed") {
 		t.Fatalf("Expected error, got %v", err)
 	}
@@ -169,7 +169,7 @@ func TestComposeDown_Timeout(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeDown("/tmp")
+	err := ComposeDown(context.Background(), "/tmp")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("Expected timeout error, got %v", err)
 	}
@@ -182,7 +182,7 @@ func TestComposeDown_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeDown("/tmp")
+	err := ComposeDown(context.Background(), "/tmp")
 	if err == nil || !strings.Contains(err.Error(), "docker compose down failed") {
 		t.Fatalf("Expected error, got %v", err)
 	}
@@ -199,7 +199,7 @@ func TestComposeRemove_Timeout(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeRemove("/tmp", true)
+	err := ComposeRemove(context.Background(), "/tmp", true)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("Expected timeout error, got %v", err)
 	}
@@ -212,7 +212,7 @@ func TestComposeRemove_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeRemove("/tmp", false)
+	err := ComposeRemove(context.Background(), "/tmp", false)
 	if err == nil {
 		t.Fatalf("Expected error, got %v", err)
 	}
@@ -225,7 +225,7 @@ func TestComposeLogs_Follow(t *testing.T) {
 	}
 	defer func() { newDockerCmd = oldNew }()
 
-	err := ComposeLogs("/tmp", "svc", true)
+	err := ComposeLogs(context.Background(), "/tmp", "svc", true)
 	if err == nil {
 		t.Fatal("Expected error from follow mode")
 	}
@@ -238,7 +238,7 @@ func TestComposeLogs_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ComposeLogs("/tmp", "", false)
+	err := ComposeLogs(context.Background(), "/tmp", "", false)
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -251,7 +251,7 @@ func TestRestartContainer_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := RestartContainer("c")
+	err := RestartContainer(context.Background(), "c")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -264,7 +264,7 @@ func TestStopContainer_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := StopContainer("c")
+	err := StopContainer(context.Background(), "c")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -277,7 +277,7 @@ func TestExecContainer_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := ExecContainer("c", "echo")
+	err := ExecContainer(context.Background(), "c", "echo")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -290,7 +290,7 @@ func TestListContainers_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	_, err := ListContainers("")
+	_, err := ListContainers(context.Background(), "")
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -316,7 +316,7 @@ func TestRunOutput_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	_, err := RunOutput([]string{"ps"})
+	_, err := RunOutput(context.Background(), []string{"ps"})
 	if err == nil {
 		t.Fatal("Expected error")
 	}
@@ -435,7 +435,7 @@ func TestListContainers_WithLabelFilter(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	containers, err := ListContainers("simpledeploy=app")
+	containers, err := ListContainers(context.Background(), "simpledeploy=app")
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -594,7 +594,7 @@ func TestContainerStatus_NotFound(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	status, err := ContainerStatus("nonexistent-container-xyz-123")
+	status, err := ContainerStatus(context.Background(), "nonexistent-container-xyz-123")
 	if err != nil {
 		t.Fatalf("ContainerStatus should not error for missing container: %v", err)
 	}
@@ -607,7 +607,7 @@ func TestContainerExists_NotFound(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	if ContainerExists("nonexistent-container-xyz-123") {
+	if ContainerExists(context.Background(), "nonexistent-container-xyz-123") {
 		t.Error("Nonexistent container should not exist")
 	}
 }
@@ -617,7 +617,7 @@ func TestListImages_Empty(t *testing.T) {
 		t.Skip("Docker not installed")
 	}
 	// Use a name that won't match any real images
-	images, err := ListImages("nonexistent-app-xyz-999")
+	images, err := ListImages(context.Background(), "nonexistent-app-xyz-999")
 	if err != nil {
 		t.Fatalf("ListImages failed: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestCleanupOldImages_NoImages(t *testing.T) {
 		t.Skip("Docker not installed")
 	}
 	// Should not error when there are no images to clean
-	err := CleanupOldImages("nonexistent-app-xyz-999", 3)
+	err := CleanupOldImages(context.Background(), "nonexistent-app-xyz-999", 3)
 	if err != nil {
 		t.Fatalf("CleanupOldImages failed: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestRunOutput_InvalidCommand(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	output, err := RunOutput([]string{"nonexistent-subcommand-xyz"})
+	output, err := RunOutput(context.Background(), []string{"nonexistent-subcommand-xyz"})
 	if err == nil {
 		t.Error("Should error for invalid docker command")
 	}
@@ -698,7 +698,7 @@ func TestRunOutput_Version(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	output, err := RunOutput([]string{"--version"})
+	output, err := RunOutput(context.Background(), []string{"--version"})
 	if err != nil {
 		t.Fatalf("docker --version failed: %v", err)
 	}
@@ -733,7 +733,7 @@ func TestContainerStatus_RunningContainer(t *testing.T) {
 		t.Skip("Could not run test container")
 	}
 
-	status, err := ContainerStatus(name)
+	status, err := ContainerStatus(context.Background(), name)
 	if err != nil {
 		t.Fatalf("ContainerStatus failed: %v", err)
 	}
@@ -742,7 +742,7 @@ func TestContainerStatus_RunningContainer(t *testing.T) {
 	}
 
 	// Verify ContainerExists returns true
-	if !ContainerExists(name) {
+	if !ContainerExists(context.Background(), name) {
 		t.Error("ContainerExists should return true for running container")
 	}
 
@@ -765,7 +765,7 @@ func TestStopContainer(t *testing.T) {
 		t.Skip("Could not run test container")
 	}
 
-	err = StopContainer(name)
+	err = StopContainer(context.Background(), name)
 	if err != nil {
 		t.Errorf("StopContainer failed: %v", err)
 	}
@@ -788,7 +788,7 @@ func TestRestartContainer(t *testing.T) {
 		t.Skip("Could not run test container")
 	}
 
-	err = RestartContainer(name)
+	err = RestartContainer(context.Background(), name)
 	if err != nil {
 		t.Errorf("RestartContainer failed: %v", err)
 	}
@@ -801,7 +801,7 @@ func TestListContainers(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	containers, err := ListContainers("")
+	containers, err := ListContainers(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListContainers failed: %v", err)
 	}
@@ -823,7 +823,7 @@ func TestExecContainer(t *testing.T) {
 		t.Skip("Could not run test container")
 	}
 
-	err = ExecContainer(name, "echo", "hello")
+	err = ExecContainer(context.Background(), name, "echo", "hello")
 	if err != nil {
 		t.Errorf("ExecContainer failed: %v", err)
 	}
@@ -841,7 +841,7 @@ func TestBuildImage_SimpleDockerfile(t *testing.T) {
 	dockerfile := "FROM hello-world:latest\n"
 	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0644)
 
-	tag, err := BuildImage(dir, "qd-test-build")
+	tag, err := BuildImage(context.Background(), dir, "qd-test-build")
 	if err != nil {
 		t.Fatalf("BuildImage failed: %v", err)
 	}
@@ -852,7 +852,7 @@ func TestBuildImage_SimpleDockerfile(t *testing.T) {
 		t.Errorf("Tag = %q, should start with 'qd-test-build:'", tag)
 	}
 
-	_ = RemoveImage(tag)
+	_ = RemoveImage(context.Background(), tag)
 }
 
 func TestComposeUpAndDown(t *testing.T) {
@@ -864,12 +864,12 @@ func TestComposeUpAndDown(t *testing.T) {
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose\n"
 	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0644)
 
-	err := ComposeUp(dir)
+	err := ComposeUp(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("ComposeUp failed: %v", err)
 	}
 
-	err = ComposeDown(dir)
+	err = ComposeDown(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("ComposeDown failed: %v", err)
 	}
@@ -884,8 +884,8 @@ func TestComposeRemove_NoVolumes(t *testing.T) {
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose-rm\n"
 	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0644)
 
-	ComposeUp(dir)
-	err := ComposeRemove(dir, false)
+	ComposeUp(context.Background(), dir)
+	err := ComposeRemove(context.Background(), dir, false)
 	if err != nil {
 		t.Fatalf("ComposeRemove failed: %v", err)
 	}
@@ -900,8 +900,8 @@ func TestComposeRemove_WithVolumes(t *testing.T) {
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose-vol\n"
 	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0644)
 
-	ComposeUp(dir)
-	err := ComposeRemove(dir, true)
+	ComposeUp(context.Background(), dir)
+	err := ComposeRemove(context.Background(), dir, true)
 	if err != nil {
 		t.Fatalf("ComposeRemove with volumes failed: %v", err)
 	}
@@ -916,17 +916,17 @@ func TestComposeLogs(t *testing.T) {
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose-logs\n"
 	os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0644)
 
-	ComposeUp(dir)
-	defer ComposeDown(dir)
+	ComposeUp(context.Background(), dir)
+	defer ComposeDown(context.Background(), dir)
 
 	// Test logs without follow
-	err := ComposeLogs(dir, "", false)
+	err := ComposeLogs(context.Background(), dir, "", false)
 	if err != nil {
 		t.Errorf("ComposeLogs (no follow) failed: %v", err)
 	}
 
 	// Test logs with service name
-	err = ComposeLogs(dir, "test-hello", false)
+	err = ComposeLogs(context.Background(), dir, "test-hello", false)
 	if err != nil {
 		t.Errorf("ComposeLogs with service name failed: %v", err)
 	}

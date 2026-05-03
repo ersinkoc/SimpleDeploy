@@ -265,7 +265,7 @@ func TestSetupCaddy_WithDocker(t *testing.T) {
 	}
 
 	// Verify container is running
-	if !docker.ContainerExists("qd-caddy") {
+	if !docker.ContainerExists(context.Background(), "qd-caddy") {
 		t.Error("qd-caddy container should exist after SetupCaddy")
 	}
 
@@ -315,7 +315,7 @@ func TestSetupTraefik_WithDocker(t *testing.T) {
 	}
 
 	// Verify container
-	if !docker.ContainerExists("qd-traefik") {
+	if !docker.ContainerExists(context.Background(), "qd-traefik") {
 		t.Error("qd-traefik container should exist after SetupTraefik")
 	}
 
@@ -488,7 +488,7 @@ func TestSetupCaddy_WritesFiles(t *testing.T) {
 	}
 
 	// Cleanup if it actually started
-	if docker.ContainerExists("qd-caddy") {
+	if docker.ContainerExists(context.Background(), "qd-caddy") {
 		StopCaddy()
 	}
 }
@@ -533,7 +533,7 @@ func TestSetupTraefik_WritesFiles(t *testing.T) {
 	}
 
 	// Cleanup if it actually started
-	if docker.ContainerExists("qd-traefik") {
+	if docker.ContainerExists(context.Background(), "qd-traefik") {
 		StopTraefik()
 	}
 }

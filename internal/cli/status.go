@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -34,7 +35,7 @@ func RunStatus() error {
 	if cfg.Proxy == "caddy" {
 		proxyContainer = "qd-caddy"
 	}
-	proxyStatus, err := docker.ContainerStatus(proxyContainer)
+	proxyStatus, err := docker.ContainerStatus(context.Background(), proxyContainer)
 	if err != nil {
 		wizard.Warn(fmt.Sprintf("Failed to get proxy status: %v", err))
 		proxyStatus = "unknown"
@@ -51,7 +52,7 @@ func RunStatus() error {
 	fmt.Printf("  Applications (%d):\n", len(s.Apps))
 	for name, app := range s.Apps {
 		containerName := docker.ContainerName(name)
-		status, err := docker.ContainerStatus(containerName)
+		status, err := docker.ContainerStatus(context.Background(), containerName)
 		if err != nil {
 			wizard.Warn(fmt.Sprintf("Failed to get status for %s: %v", name, err))
 			status = "unknown"

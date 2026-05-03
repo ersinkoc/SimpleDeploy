@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 
 func TestClone_InvalidRepo(t *testing.T) {
 	tmpDir := t.TempDir()
-	err := Clone("https://github.com/nonexistent/repo-xyz-999.git", "main", filepath.Join(tmpDir, "dest"), "")
+	err := Clone(context.Background(), "https://github.com/nonexistent/repo-xyz-999.git", "main", filepath.Join(tmpDir, "dest"), "")
 	if err == nil {
 		t.Error("Should fail for invalid repo")
 	}
@@ -26,7 +27,7 @@ func TestClone_MkdirAllError(t *testing.T) {
 	}
 	defer func() { osMkdirAll = old }()
 
-	err := Clone("https://github.com/test/repo.git", "main", "/tmp/dest", "")
+	err := Clone(context.Background(), "https://github.com/test/repo.git", "main", "/tmp/dest", "")
 	if err == nil {
 		t.Error("Clone should fail when MkdirAll fails")
 	}
@@ -40,7 +41,7 @@ func TestClone_WriteAskpassError(t *testing.T) {
 	defer func() { osCreateTemp = old }()
 
 	tmpDir := t.TempDir()
-	err := Clone("https://github.com/test/repo.git", "main", filepath.Join(tmpDir, "dest"), "token")
+	err := Clone(context.Background(), "https://github.com/test/repo.git", "main", filepath.Join(tmpDir, "dest"), "token")
 	if err == nil {
 		t.Error("Clone should fail when askpass script creation fails")
 	}
@@ -82,7 +83,7 @@ func TestPull_WithToken(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
-	Clone(repoDir, "master", cloneDir, "")
+	Clone(context.Background(), repoDir, "master", cloneDir, "")
 
 	// Update original
 	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v2"), 0644)
@@ -90,7 +91,7 @@ func TestPull_WithToken(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "update")
 
 	// Pull with token (on local repo, token is ignored but path is exercised)
-	if err := Pull(cloneDir, "master", "test-token"); err != nil {
+	if err := Pull(context.Background(), cloneDir, "master", "test-token"); err != nil {
 		t.Fatalf("Pull with token failed: %v", err)
 	}
 
@@ -110,7 +111,7 @@ func TestPull_WriteAskpassError(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
-	Clone(repoDir, "master", cloneDir, "")
+	Clone(context.Background(), repoDir, "master", cloneDir, "")
 
 	old := osCreateTemp
 	osCreateTemp = func(dir, pattern string) (*os.File, error) {
@@ -118,7 +119,7 @@ func TestPull_WriteAskpassError(t *testing.T) {
 	}
 	defer func() { osCreateTemp = old }()
 
-	err := Pull(cloneDir, "master", "token")
+	err := Pull(context.Background(), cloneDir, "master", "token")
 	if err == nil {
 		t.Error("Pull should fail when askpass script creation fails")
 	}
@@ -271,7 +272,7 @@ func TestClone_LocalRepo(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	destDir := filepath.Join(t.TempDir(), "clone")
-	if err := Clone(repoDir, "master", destDir, ""); err != nil {
+	if err := Clone(context.Background(), repoDir, "master", destDir, ""); err != nil {
 		t.Fatalf("Clone failed: %v", err)
 	}
 
@@ -290,7 +291,7 @@ func TestPull_LocalRepo(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	cloneDir := filepath.Join(t.TempDir(), "clone")
-	Clone(repoDir, "master", cloneDir, "")
+	Clone(context.Background(), repoDir, "master", cloneDir, "")
 
 	// Update original
 	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v2"), 0644)
@@ -298,7 +299,7 @@ func TestPull_LocalRepo(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "update")
 
 	// Pull
-	if err := Pull(cloneDir, "master"); err != nil {
+	if err := Pull(context.Background(), cloneDir, "master"); err != nil {
 		t.Fatalf("Pull failed: %v", err)
 	}
 
@@ -309,7 +310,7 @@ func TestPull_LocalRepo(t *testing.T) {
 }
 
 func TestPull_NotRepo(t *testing.T) {
-	err := Pull(t.TempDir(), "main")
+	err := Pull(context.Background(), t.TempDir(), "main")
 	if err == nil {
 		t.Error("Should fail for non-repo directory")
 	}
@@ -327,7 +328,7 @@ func TestClone_WithToken(t *testing.T) {
 
 	destDir := filepath.Join(t.TempDir(), "clone")
 	// Clone with a local path won't use the token but verifies no crash
-	if err := Clone(repoDir, "master", destDir, "test-token-123"); err != nil {
+	if err := Clone(context.Background(), repoDir, "master", destDir, "test-token-123"); err != nil {
 		t.Fatalf("Clone with token on local repo should work: %v", err)
 	}
 }
@@ -342,7 +343,7 @@ func TestClone_CreatesParentDir(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	destDir := filepath.Join(t.TempDir(), "nested", "dir", "clone")
-	if err := Clone(repoDir, "master", destDir, ""); err != nil {
+	if err := Clone(context.Background(), repoDir, "master", destDir, ""); err != nil {
 		t.Fatalf("Should create parent dirs and clone: %v", err)
 	}
 }
@@ -357,7 +358,7 @@ func TestClone_WrongBranch(t *testing.T) {
 	runGitCmd(t, repoDir, "commit", "-m", "initial")
 
 	destDir := filepath.Join(t.TempDir(), "clone")
-	err := Clone(repoDir, "nonexistent-branch-xyz", destDir, "")
+	err := Clone(context.Background(), repoDir, "nonexistent-branch-xyz", destDir, "")
 	if err == nil {
 		t.Error("Should fail for nonexistent branch")
 	}

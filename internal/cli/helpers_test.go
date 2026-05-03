@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -757,7 +758,7 @@ func TestRunStatus_WithState(t *testing.T) {
 	}
 
 	// Verify docker.ContainerStatus works for non-existent containers
-	status, err := docker.ContainerStatus("qd-nonexistent")
+	status, err := docker.ContainerStatus(context.Background(), "qd-nonexistent")
 	if err != nil {
 		t.Errorf("ContainerStatus should not error for missing containers: %v", err)
 	}
@@ -1830,7 +1831,7 @@ func TestRunDeploy_CancelDeploy(t *testing.T) {
 	// flow has something to chew on before the user cancels.
 	origGitClone := gitClone
 	t.Cleanup(func() { gitClone = origGitClone })
-	gitClone = func(repo, branch, dest, token string) error {
+	gitClone = func(ctx context.Context, repo, branch, dest, token string) error {
 		if err := os.MkdirAll(dest, 0755); err != nil {
 			return err
 		}

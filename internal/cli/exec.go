@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
@@ -21,5 +22,5 @@ func RunExec(args []string) error {
 	}
 
 	containerName := docker.ContainerName(appName)
-	return dockerExecContainer(containerName, args[1:]...)
+	return dockerExecContainer(context.Background(), containerName, args[1:]...)
 }

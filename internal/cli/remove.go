@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -46,7 +47,7 @@ func RunRemove(args []string) error {
 
 	// Stop and remove containers
 	wizard.Info("Stopping containers...")
-	if err := dockerComposeRemove(appDir, removeVolumes); err != nil {
+	if err := dockerComposeRemove(context.Background(), appDir, removeVolumes); err != nil {
 		wizard.Warn("Failed to remove containers: " + err.Error())
 	}
 
@@ -79,7 +80,7 @@ func RunRemove(args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
 			}
 		}()
-		dockerCleanupOldImages(appName, 0)
+		dockerCleanupOldImages(context.Background(), appName, 0)
 	}()
 
 	wizard.Success(fmt.Sprintf("Application '%s' removed", appName))
