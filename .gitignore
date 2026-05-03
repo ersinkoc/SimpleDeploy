@@ -28,3 +28,12 @@ coverage.html
 
 
 dist/
+.dfmt/
+
+# AI assistant workspace rules (canonical instructions live in CLAUDE.md)
+.claude/
+.cursorrules
+.windsurfrules
+AGENTS.md
+GEMINI.md
+.github/copilot-instructions.md
