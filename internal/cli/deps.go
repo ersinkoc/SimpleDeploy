@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"io"
 	"os"
 
@@ -15,7 +16,7 @@ import (
 )
 
 type webhookServer interface {
-	SetDeployHandler(func(appName string) error)
+	SetDeployHandler(func(ctx context.Context, appName string) error)
 	Start() error
 }
 

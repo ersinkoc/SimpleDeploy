@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -1629,15 +1630,15 @@ func TestRunRedeploy_SaveAppError(t *testing.T) {
 // ------------------------------------------------------------------
 
 type mockWebhookServer struct {
-	handler func(appName string) error
+	handler func(ctx context.Context, appName string) error
 }
 
-func (m *mockWebhookServer) SetDeployHandler(h func(appName string) error) {
+func (m *mockWebhookServer) SetDeployHandler(h func(ctx context.Context, appName string) error) {
 	m.handler = h
 }
 func (m *mockWebhookServer) Start() error {
 	if m.handler != nil {
-		_ = m.handler("webhookapp")
+		_ = m.handler(context.Background(), "webhookapp")
 	}
 	return nil
 }

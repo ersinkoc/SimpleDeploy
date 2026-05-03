@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,23 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
+// RunRedeploy is the CLI-facing entry point. It wraps RunRedeployContext
+// with a never-cancelling context.Background() so existing callers
+// (root.go's command dispatch, helpers_test.go) keep working unchanged.
 func RunRedeploy(args []string) error {
+	return RunRedeployContext(context.Background(), args)
+}
+
+// RunRedeployContext is the ctx-aware variant used by the webhook server,
+// which arms a per-deploy timeout (deployTimeout, default 30 min) and
+// shuts the rate-limiter down on shutdown. ctx is checked at coarse
+// boundaries between major steps; if cancelled, the function returns
+// without continuing. The long-running subprocess steps themselves
+// (gitPull, dockerBuildImage, dockerComposeUp) currently use their own
+// internal timeouts and do NOT honor caller ctx — fully cancellable
+// deploys would require threading ctx into git.Pull, docker.BuildImage,
+// docker.ComposeUp, which is intentionally deferred.
+func RunRedeployContext(ctx context.Context, args []string) error {
 	appName, err := appNameFromArgs(args)
 	if err != nil {
 		return err
@@ -45,12 +62,20 @@ func RunRedeploy(args []string) error {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("redeploy cancelled before git pull: %w", err)
+	}
+
 	// Pull latest
 	wizard.Info("Pulling latest changes...")
 	if err := gitPull(sourceDir, app.Branch, gitToken); err != nil {
 		return fmt.Errorf("git pull failed: %w", err)
 	}
 	wizard.Success("Repository updated")
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("redeploy cancelled before build: %w", err)
+	}
 
 	// Build new image
 	wizard.Info("Building new image...")
@@ -73,12 +98,20 @@ func RunRedeploy(args []string) error {
 		return fmt.Errorf("failed to update compose: %w", err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("redeploy cancelled before compose up: %w", err)
+	}
+
 	// Restart
 	wizard.Info("Restarting containers...")
 	if err := dockerComposeUp(appDir); err != nil {
 		return fmt.Errorf("failed to restart: %w", err)
 	}
 	wizard.Success("Containers restarted")
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("redeploy cancelled before caddy reload: %w", err)
+	}
 
 	// Reload Caddy if applicable
 	if cfg.Proxy == "caddy" {

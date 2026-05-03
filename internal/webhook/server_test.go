@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -147,7 +148,7 @@ func TestHandleWebhook_Success(t *testing.T) {
 
 	deployCalled := false
 	srv := NewServer(9000, "secret")
-	srv.SetDeployHandler(func(appName string) error {
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
 		deployCalled = true
 		if appName != "myapp" {
 			t.Errorf("Deploy called with %q, want 'myapp'", appName)
@@ -199,7 +200,7 @@ func TestHandleWebhook_DeployError(t *testing.T) {
 	webhookSaveApp(t, "myapp", "main")
 
 	srv := NewServer(9000, "secret")
-	srv.SetDeployHandler(func(appName string) error {
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
 		return fmt.Errorf("deploy failed")
 	})
 
@@ -223,7 +224,7 @@ func TestHandleWebhook_EmptyBranch(t *testing.T) {
 
 	deployTriggered := false
 	srv := NewServer(9000, "secret")
-	srv.SetDeployHandler(func(appName string) error {
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
 		deployTriggered = true
 		return nil
 	})

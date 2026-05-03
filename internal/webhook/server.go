@@ -95,7 +95,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 type Server struct {
 	Port        int
 	Secret      string
-	deploy      func(appName string) error
+	deploy      func(ctx context.Context, appName string) error
 	deployMu    sync.Mutex
 	deployLocks map[string]bool
 	deployWg    sync.WaitGroup
@@ -111,7 +111,7 @@ func NewServer(port int, secret string) *Server {
 	}
 }
 
-func (s *Server) SetDeployHandler(handler func(appName string) error) {
+func (s *Server) SetDeployHandler(handler func(ctx context.Context, appName string) error) {
 	s.deploy = handler
 }
 
@@ -258,21 +258,22 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 			log.Printf("Webhook triggered deploy for %s", appName)
 
-			// Observability-only timeout: the deploy handler signature is
-			// `func(string) error` and cannot accept a context, so this ctx
-			// does NOT actually cancel an in-flight deploy. It exists so the
-			// operator gets a "timed out after X, waiting for deploy to
-			// finish" log line — useful when investigating webhook latency or
-			// a wedged deploy. Adding cancellation would require changing
-			// SetDeployHandler's signature, which is intentionally deferred
-			// to avoid breaking external callers in the CLI package.
+			// ctx is passed to the deploy handler so it can short-circuit on
+			// timeout or shutdown. Whether real cancellation actually
+			// interrupts an in-flight deploy depends on the handler honoring
+			// ctx — RunRedeployContext checks ctx.Err() at major boundaries
+			// (between git pull, build, compose up, caddy reload, state save)
+			// but the long-running subprocess steps themselves run to their
+			// own internal timeouts. Future work can thread ctx into
+			// docker.ComposeUp / docker.BuildImage / git.Pull for true
+			// per-syscall cancellation.
 			ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
 			defer cancel()
 
 			// Run deploy in a goroutine so we can handle timeout
 			done := make(chan error, 1)
 			go func() {
-				done <- s.deploy(appName)
+				done <- s.deploy(ctx, appName)
 			}()
 
 			// Wait for deploy to complete or timeout
@@ -282,7 +283,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 					log.Printf("Deploy failed for %s: %v", appName, err)
 				}
 			case <-ctx.Done():
-				log.Printf("Deploy for %s timed out after %v, waiting for deploy to finish", appName, deployTimeout)
+				log.Printf("Deploy for %s timed out after %v, waiting for handler to honor ctx", appName, deployTimeout)
 				<-done
 				log.Printf("Timed-out deploy for %s completed", appName)
 			}

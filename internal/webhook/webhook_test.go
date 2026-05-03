@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -126,14 +127,14 @@ func TestNewServer(t *testing.T) {
 func TestServerSetDeployHandler(t *testing.T) {
 	srv := NewServer(9000, "secret")
 	called := false
-	srv.SetDeployHandler(func(appName string) error {
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
 		called = true
 		return nil
 	})
 	if srv.deploy == nil {
 		t.Error("Deploy handler should be set")
 	}
-	srv.deploy("test")
+	srv.deploy(context.Background(), "test")
 	if !called {
 		t.Error("Deploy handler should have been called")
 	}
@@ -283,7 +284,7 @@ func TestHandleWebhook_DeployAlreadyInProgress(t *testing.T) {
 	srv := NewServer(9000, "secret")
 
 	deployStarted := make(chan struct{})
-	srv.SetDeployHandler(func(appName string) error {
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
 		close(deployStarted)
 		time.Sleep(500 * time.Millisecond)
 		return nil
@@ -326,7 +327,7 @@ func TestHandleWebhook_DeployTimeout(t *testing.T) {
 	webhookSaveApp(t, "myapp", "main")
 
 	srv := NewServer(9000, "secret")
-	srv.SetDeployHandler(func(appName string) error {
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
 		time.Sleep(200 * time.Millisecond)
 		return nil
 	})

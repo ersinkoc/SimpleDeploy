@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -71,8 +72,8 @@ func RunWebhook(args []string) error {
 	}
 
 	srv := webhookNewServer(port, cfg.WebhookSecret)
-	srv.SetDeployHandler(func(appName string) error {
-		return RunRedeploy([]string{appName})
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		return RunRedeployContext(ctx, []string{appName})
 	})
 
 	wizard.Info(fmt.Sprintf("Starting webhook server on :%d", port))
