@@ -1,7 +1,7 @@
 .PHONY: build test clean release docker docker-build docker-push lint
 
 BINARY := simpledeploy
-VERSION := 0.0.7
+VERSION := 0.0.8
 LDFLAGS := -s -w
 REGISTRY := ghcr.io/ersinkoc
 
