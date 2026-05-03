@@ -1625,6 +1625,46 @@ func TestRunRedeploy_SaveAppError(t *testing.T) {
 	})
 }
 
+func TestRunRedeployContext_CancelledDuringGitPull(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+	state.SaveConfig(&state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"})
+
+	app := state.NewAppConfig()
+	app.Name = "canceltest"
+	app.Branch = "main"
+	app.Domain = "canceltest.example.com"
+	app.Repo = "https://example.com/repo.git"
+	app.Status = "running"
+	state.SaveApp(app)
+
+	sourceDir := filepath.Join(cfgpkg.AppDir("canceltest"), "source")
+	os.MkdirAll(sourceDir, 0755)
+	os.WriteFile(filepath.Join(sourceDir, "Dockerfile"), []byte("FROM scratch\n"), 0644)
+
+	appDir := cfgpkg.AppDir("canceltest")
+	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"), []byte("services:\n  canceltest:\n    image: old\n"), 0644)
+
+	oldPull := gitPull
+	gitPull = func(ctx context.Context, dir, branch string, token ...string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	defer func() { gitPull = oldPull }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := RunRedeployContext(ctx, []string{"canceltest"})
+	if err == nil {
+		t.Fatal("Expected error when context is cancelled during git pull")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("Expected cancellation error, got: %v", err)
+	}
+}
+
 // ------------------------------------------------------------------
 // Webhook
 // ------------------------------------------------------------------
