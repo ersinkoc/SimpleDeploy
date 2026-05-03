@@ -104,7 +104,7 @@ func filterCaddyDomain(content, domain string) string {
 	return strings.Join(result, "\n")
 }
 
-func SetupCaddy(acmeEmail string) error {
+func SetupCaddy(ctx context.Context, acmeEmail string) error {
 	// Defense-in-depth: init.go validates this at the input layer, but the
 	// email is interpolated raw into the Caddyfile global block below, so
 	// re-check here. A newline-bearing value would let an attacker append
@@ -131,7 +131,7 @@ func SetupCaddy(acmeEmail string) error {
 		return fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
 
-	if err := dockerCreateNetwork("simpledeploy"); err != nil {
+	if err := dockerCreateNetwork(ctx, "simpledeploy"); err != nil {
 		return err
 	}
 

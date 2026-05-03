@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -21,9 +20,7 @@ func IsInstalled() bool {
 	return err == nil
 }
 
-func GetVersion() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+func GetVersion(ctx context.Context) (string, error) {
 	cmd := newDockerCmdContext(ctx, "docker", "--version")
 	output, err := cmd.Output()
 	if err != nil {
@@ -32,8 +29,8 @@ func GetVersion() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func IsComposeInstalled() bool {
-	cmd := newDockerCmd("docker", "compose", "version")
+func IsComposeInstalled(ctx context.Context) bool {
+	cmd := newDockerCmdContext(ctx, "docker", "compose", "version")
 	return cmd.Run() == nil
 }
 
@@ -49,9 +46,9 @@ func Install() error {
 	return nil
 }
 
-func EnsureDocker() error {
+func EnsureDocker(ctx context.Context) error {
 	if IsInstalled() {
-		ver, _ := GetVersion()
+		ver, _ := GetVersion(ctx)
 		wizard.Success(fmt.Sprintf("%s detected", ver))
 		return nil
 	}
@@ -64,7 +61,7 @@ func EnsureDocker() error {
 		return err
 	}
 
-	if !IsComposeInstalled() {
+	if !IsComposeInstalled(ctx) {
 		wizard.Info("Docker Compose not found. Please install the Docker Compose plugin.")
 		return fmt.Errorf("Docker Compose plugin is required")
 	}
@@ -72,17 +69,15 @@ func EnsureDocker() error {
 	return nil
 }
 
-func NetworkExists(name string) bool {
-	cmd := newDockerCmd("docker", "network", "inspect", name)
+func NetworkExists(ctx context.Context, name string) bool {
+	cmd := newDockerCmdContext(ctx, "docker", "network", "inspect", name)
 	return cmd.Run() == nil
 }
 
-func CreateNetwork(name string) error {
-	if NetworkExists(name) {
+func CreateNetwork(ctx context.Context, name string) error {
+	if NetworkExists(ctx, name) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	cmd := newDockerCmdContext(ctx, "docker", "network", "create", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

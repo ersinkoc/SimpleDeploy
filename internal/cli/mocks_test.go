@@ -145,7 +145,7 @@ func TestRoute_Status(t *testing.T) {
 
 func TestRoute_Init(t *testing.T) {
 	old := dockerEnsureDocker
-	dockerEnsureDocker = func() error { return errors.New("docker not installed") }
+	dockerEnsureDocker = func(ctx context.Context) error { return errors.New("docker not installed") }
 	defer func() { dockerEnsureDocker = old }()
 	if err := Route([]string{"init"}); err == nil {
 		t.Error("Expected error")
@@ -233,7 +233,7 @@ func TestRunInit_SaveConfigError(t *testing.T) {
 
 func TestRunInit_SetupTraefikError(t *testing.T) {
 	old := proxySetupTraefik
-	proxySetupTraefik = func(email string) error { return errors.New("fail") }
+	proxySetupTraefik = func(ctx context.Context, email string) error { return errors.New("fail") }
 	defer func() { proxySetupTraefik = old }()
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -247,7 +247,7 @@ func TestRunInit_SetupTraefikError(t *testing.T) {
 
 func TestRunInit_SetupCaddyError(t *testing.T) {
 	old := proxySetupCaddy
-	proxySetupCaddy = func(email string) error { return errors.New("fail") }
+	proxySetupCaddy = func(ctx context.Context, email string) error { return errors.New("fail") }
 	defer func() { proxySetupCaddy = old }()
 	dir := t.TempDir()
 	state.InitState(dir)

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -13,7 +14,7 @@ func RunInit() error {
 
 	// 1. Docker check
 	wizard.Info("Checking Docker installation...")
-	if err := dockerEnsureDocker(); err != nil {
+	if err := dockerEnsureDocker(context.Background()); err != nil {
 		return err
 	}
 
@@ -99,11 +100,11 @@ func RunInit() error {
 	// 6. Setup reverse proxy
 	fmt.Println()
 	if proxyType == "traefik" {
-		if err := proxySetupTraefik(acmeEmail); err != nil {
+		if err := proxySetupTraefik(context.Background(), acmeEmail); err != nil {
 			return fmt.Errorf("failed to setup Traefik: %w", err)
 		}
 	} else {
-		if err := proxySetupCaddy(acmeEmail); err != nil {
+		if err := proxySetupCaddy(context.Background(), acmeEmail); err != nil {
 			return fmt.Errorf("failed to setup Caddy: %w", err)
 		}
 	}

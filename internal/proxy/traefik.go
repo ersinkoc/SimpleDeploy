@@ -23,7 +23,7 @@ func getProxyDir() string {
 	return config.ProxyDir()
 }
 
-func SetupTraefik(acmeEmail string) error {
+func SetupTraefik(ctx context.Context, acmeEmail string) error {
 	// Defense-in-depth: init.go validates at input, but the email is
 	// interpolated raw into the compose YAML and into a .env file below.
 	// Stricter check than the previous regex-only path: state.ValidateEmail
@@ -57,7 +57,7 @@ func SetupTraefik(acmeEmail string) error {
 	}
 
 	// Ensure network exists
-	if err := dockerCreateNetwork("simpledeploy"); err != nil {
+	if err := dockerCreateNetwork(ctx, "simpledeploy"); err != nil {
 		return err
 	}
 

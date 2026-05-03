@@ -225,7 +225,7 @@ func TestGenerateTraefikCompose(t *testing.T) {
 }
 
 func TestSetupCaddy_WithDocker(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled() {
+	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -241,9 +241,9 @@ func TestSetupCaddy_WithDocker(t *testing.T) {
 	_ = dir
 
 	// Create the simpledeploy network (required by caddy compose)
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err != nil {
 		t.Fatalf("SetupCaddy failed: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestSetupCaddy_WithDocker(t *testing.T) {
 }
 
 func TestSetupTraefik_WithDocker(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled() {
+	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -291,9 +291,9 @@ func TestSetupTraefik_WithDocker(t *testing.T) {
 	setupTestProxyDir(t)
 
 	// Create network
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
-	err := SetupTraefik("admin@test.com")
+	err := SetupTraefik(context.Background(), "admin@test.com")
 	if err != nil {
 		t.Fatalf("SetupTraefik failed: %v", err)
 	}
@@ -461,9 +461,9 @@ func TestSetupCaddy_WritesFiles(t *testing.T) {
 	// Clean up any stale containers from previous test runs
 	_ = docker.Run([]string{"rm", "-f", "qd-caddy"})
 
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
-	err := SetupCaddy("setup-test@example.com")
+	err := SetupCaddy(context.Background(), "setup-test@example.com")
 	// May fail at compose up if ports are in use, but files should still be written
 	_ = err
 
@@ -504,9 +504,9 @@ func TestSetupTraefik_WritesFiles(t *testing.T) {
 	// Clean up any stale containers from previous test runs
 	_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
 
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
-	err := SetupTraefik("traefik-setup@example.com")
+	err := SetupTraefik(context.Background(), "traefik-setup@example.com")
 	_ = err
 
 	// Check compose file
@@ -555,7 +555,7 @@ func TestSetupCaddy_ReadOnlyDir(t *testing.T) {
 	ProxyDir = filepath.Join(readOnlyDir, "nested", "proxy")
 	defer func() { ProxyDir = "" }()
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("Should fail with read-only proxy dir")
 	}
@@ -578,7 +578,7 @@ func TestSetupTraefik_ReadOnlyDir(t *testing.T) {
 	ProxyDir = filepath.Join(readOnlyDir, "nested", "proxy")
 	defer func() { ProxyDir = "" }()
 
-	err := SetupTraefik("test@test.com")
+	err := SetupTraefik(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("Should fail with read-only proxy dir")
 	}
@@ -602,7 +602,7 @@ func TestSetupCaddy_MkdirAllError(t *testing.T) {
 	}
 	defer func() { osMkdirAll = old }()
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupCaddy should fail when MkdirAll fails")
 	}
@@ -622,7 +622,7 @@ func TestSetupCaddy_WriteComposeError(t *testing.T) {
 	}
 	defer func() { osWriteFile = old }()
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupCaddy should fail when WriteFile for compose fails")
 	}
@@ -642,7 +642,7 @@ func TestSetupCaddy_WriteCaddyfileError(t *testing.T) {
 	}
 	defer func() { osWriteFile = old }()
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupCaddy should fail when WriteFile for Caddyfile fails")
 	}
@@ -652,12 +652,12 @@ func TestSetupCaddy_CreateNetworkError(t *testing.T) {
 	setupTestProxyDir(t)
 
 	old := dockerCreateNetwork
-	dockerCreateNetwork = func(name string) error {
+	dockerCreateNetwork = func(ctx context.Context, name string) error {
 		return fmt.Errorf("network error")
 	}
 	defer func() { dockerCreateNetwork = old }()
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupCaddy should fail when CreateNetwork fails")
 	}
@@ -670,7 +670,7 @@ func TestSetupTraefik_MkdirAllError(t *testing.T) {
 	}
 	defer func() { osMkdirAll = old }()
 
-	err := SetupTraefik("test@test.com")
+	err := SetupTraefik(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupTraefik should fail when MkdirAll fails")
 	}
@@ -690,7 +690,7 @@ func TestSetupTraefik_WriteComposeError(t *testing.T) {
 	}
 	defer func() { osWriteFile = old }()
 
-	err := SetupTraefik("test@test.com")
+	err := SetupTraefik(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupTraefik should fail when WriteFile for compose fails")
 	}
@@ -710,7 +710,7 @@ func TestSetupTraefik_WriteEnvError(t *testing.T) {
 	}
 	defer func() { osWriteFile = old }()
 
-	err := SetupTraefik("test@test.com")
+	err := SetupTraefik(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupTraefik should fail when WriteFile for .env fails")
 	}
@@ -735,7 +735,7 @@ func TestSetupTraefik_EnvFileMode0600(t *testing.T) {
 	// SetupTraefik will fail at the docker-network step in unit tests without
 	// Docker installed; we only care about the perm passed to the .env write,
 	// which happens before that.
-	_ = SetupTraefik("test@test.com")
+	_ = SetupTraefik(context.Background(), "test@test.com")
 
 	if perm, ok := captured[".env"]; !ok {
 		t.Fatal("SetupTraefik did not write .env")
@@ -748,12 +748,12 @@ func TestSetupTraefik_CreateNetworkError(t *testing.T) {
 	setupTestProxyDir(t)
 
 	old := dockerCreateNetwork
-	dockerCreateNetwork = func(name string) error {
+	dockerCreateNetwork = func(ctx context.Context, name string) error {
 		return fmt.Errorf("network error")
 	}
 	defer func() { dockerCreateNetwork = old }()
 
-	err := SetupTraefik("test@test.com")
+	err := SetupTraefik(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupTraefik should fail when CreateNetwork fails")
 	}
@@ -768,7 +768,7 @@ func TestSetupCaddy_DockerComposeUpError(t *testing.T) {
 	}
 	defer func() { execCommand = old }()
 
-	err := SetupCaddy("test@test.com")
+	err := SetupCaddy(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupCaddy should fail when docker compose up fails")
 	}
@@ -783,7 +783,7 @@ func TestSetupTraefik_DockerComposeUpError(t *testing.T) {
 	}
 	defer func() { execCommand = old }()
 
-	err := SetupTraefik("test@test.com")
+	err := SetupTraefik(context.Background(), "test@test.com")
 	if err == nil {
 		t.Error("SetupTraefik should fail when docker compose up fails")
 	}

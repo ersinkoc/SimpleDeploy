@@ -1457,7 +1457,7 @@ func setWizardInput(t *testing.T, input string) {
 }
 
 func TestRunInit_WithDocker(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled() {
+	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -1497,7 +1497,7 @@ func TestRunInit_WithDocker(t *testing.T) {
 	})
 
 	// Create network (needed by proxy setup)
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
 	_ = captureStdout(func() {
 		err := RunInit()
@@ -1532,7 +1532,7 @@ func TestRunInit_WithDocker(t *testing.T) {
 }
 
 func TestRunInit_CaddyChoice(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled() {
+	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -1563,7 +1563,7 @@ func TestRunInit_CaddyChoice(t *testing.T) {
 		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
 	})
 
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
 	_ = captureStdout(func() {
 		err := RunInit()
@@ -1627,7 +1627,7 @@ func TestRunInit_ReconfigureNo(t *testing.T) {
 }
 
 func TestRunInit_AlreadyInitReconfigure(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled() {
+	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -1658,7 +1658,7 @@ func TestRunInit_AlreadyInitReconfigure(t *testing.T) {
 		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
 	})
 
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
 	// Say "y" to reconfigure, then new inputs
 	input := "y\n1\nnewdomain.com\n\nnew@test.com\n\n\n"
@@ -1687,7 +1687,7 @@ func TestEnsureDocker_Installed(t *testing.T) {
 	}
 
 	_ = captureStdout(func() {
-		err := docker.EnsureDocker()
+		err := docker.EnsureDocker(context.Background())
 		if err != nil {
 			t.Errorf("EnsureDocker should succeed when Docker installed: %v", err)
 		}
@@ -1695,7 +1695,7 @@ func TestEnsureDocker_Installed(t *testing.T) {
 }
 
 func TestRunInit_InvalidPort(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled() {
+	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -1722,7 +1722,7 @@ func TestRunInit_InvalidPort(t *testing.T) {
 		_ = docker.Run([]string{"rm", "-f", "qd-traefik", "qd-caddy"})
 	})
 
-	docker.CreateNetwork("simpledeploy")
+	docker.CreateNetwork(context.Background(), "simpledeploy")
 
 	// Choose traefik, domain, wildcard yes, email, auto secret, invalid port "abc" → should default to 9000
 	input := "1\ntest.com\n\nadmin@test.com\n\nabc\n"

@@ -329,20 +329,20 @@ func TestGetVersion_Error(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	_, err := GetVersion()
+	_, err := GetVersion(context.Background())
 	if err == nil {
 		t.Fatal("Expected error")
 	}
 }
 
 func TestIsComposeInstalled_False(t *testing.T) {
-	oldNew := newDockerCmd
-	newDockerCmd = func(name string, arg ...string) dockerCmd {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
 		return &mockCmd{runErr: errors.New("not installed")}
 	}
-	defer func() { newDockerCmd = oldNew }()
+	defer func() { newDockerCmdContext = oldNew }()
 
-	if IsComposeInstalled() {
+	if IsComposeInstalled(context.Background()) {
 		t.Fatal("Expected false")
 	}
 }
@@ -353,13 +353,13 @@ func TestIsComposeInstalled_False(t *testing.T) {
 // TestIsComposeInstalled below stays around as an integration smoke test
 // when a real docker is present.
 func TestIsComposeInstalled_True(t *testing.T) {
-	oldNew := newDockerCmd
-	newDockerCmd = func(name string, arg ...string) dockerCmd {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
 		return &mockCmd{} // Run returns nil → compose plugin "available"
 	}
-	defer func() { newDockerCmd = oldNew }()
+	defer func() { newDockerCmdContext = oldNew }()
 
-	if !IsComposeInstalled() {
+	if !IsComposeInstalled(context.Background()) {
 		t.Fatal("Expected true when mocked docker compose returns success")
 	}
 }
@@ -415,14 +415,20 @@ func TestEnsureDocker_InstallAndComposeSuccess(t *testing.T) {
 		if name == "sh" {
 			return &mockCmd{} // Install succeeds
 		}
+		return &mockCmd{output: []byte("Docker version 24.0")}
+	}
+	defer func() { newDockerCmd = oldNew }()
+
+	oldCtx := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
 		if strings.Contains(strings.Join(arg, " "), "compose version") {
 			return &mockCmd{} // Compose installed
 		}
 		return &mockCmd{output: []byte("Docker version 24.0")}
 	}
-	defer func() { newDockerCmd = oldNew }()
+	defer func() { newDockerCmdContext = oldCtx }()
 
-	err := EnsureDocker()
+	err := EnsureDocker(context.Background())
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -455,7 +461,7 @@ func TestEnsureDocker_AlreadyInstalled_Mock(t *testing.T) {
 	}
 	defer func() { newDockerCmdContext = oldNew }()
 
-	err := EnsureDocker()
+	err := EnsureDocker(context.Background())
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -470,7 +476,7 @@ func TestEnsureDocker_DeclineInstall(t *testing.T) {
 	wizardConfirm = func(prompt string, defaultYes bool) bool { return false }
 	defer func() { wizardConfirm = oldConfirm }()
 
-	err := EnsureDocker()
+	err := EnsureDocker(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "Docker is required") {
 		t.Fatalf("Expected error, got %v", err)
 	}
@@ -491,7 +497,7 @@ func TestEnsureDocker_InstallError(t *testing.T) {
 	}
 	defer func() { newDockerCmd = oldNew }()
 
-	err := EnsureDocker()
+	err := EnsureDocker(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "install failed") {
 		t.Fatalf("Expected error, got %v", err)
 	}
@@ -506,50 +512,47 @@ func TestEnsureDocker_MissingCompose(t *testing.T) {
 	wizardConfirm = func(prompt string, defaultYes bool) bool { return true }
 	defer func() { wizardConfirm = oldConfirm }()
 
-	callCount := 0
 	oldNew := newDockerCmd
 	newDockerCmd = func(name string, arg ...string) dockerCmd {
-		callCount++
-		if name == "sh" {
-			return &mockCmd{} // Install succeeds
-		}
-		// docker compose version
-		return &mockCmd{runErr: errors.New("compose missing")}
+		return &mockCmd{} // Install succeeds
 	}
 	defer func() { newDockerCmd = oldNew }()
 
-	err := EnsureDocker()
+	oldCtx := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		return &mockCmd{runErr: errors.New("compose missing")}
+	}
+	defer func() { newDockerCmdContext = oldCtx }()
+
+	err := EnsureDocker(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "Docker Compose plugin is required") {
 		t.Fatalf("Expected compose error, got %v", err)
 	}
 }
 
 func TestNetworkExists_False(t *testing.T) {
-	oldNew := newDockerCmd
-	newDockerCmd = func(name string, arg ...string) dockerCmd {
+	oldNew := newDockerCmdContext
+	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
 		return &mockCmd{runErr: errors.New("not found")}
 	}
-	defer func() { newDockerCmd = oldNew }()
+	defer func() { newDockerCmdContext = oldNew }()
 
-	if NetworkExists("net") {
+	if NetworkExists(context.Background(), "net") {
 		t.Fatal("Expected false")
 	}
 }
 
 func TestCreateNetwork_Error(t *testing.T) {
-	oldNew := newDockerCmd
-	newDockerCmd = func(name string, arg ...string) dockerCmd {
-		return &mockCmd{runErr: errors.New("not found")}
-	}
-	defer func() { newDockerCmd = oldNew }()
-
-	oldCtx := newDockerCmdContext
+	oldNew := newDockerCmdContext
 	newDockerCmdContext = func(ctx context.Context, name string, arg ...string) dockerCmd {
+		if strings.Contains(strings.Join(arg, " "), "inspect") {
+			return &mockCmd{runErr: errors.New("not found")}
+		}
 		return &mockCmd{combinedErr: errors.New("create failed")}
 	}
-	defer func() { newDockerCmdContext = oldCtx }()
+	defer func() { newDockerCmdContext = oldNew }()
 
-	err := CreateNetwork("net")
+	err := CreateNetwork(context.Background(), "net")
 	if err == nil || !strings.Contains(err.Error(), "failed to create network") {
 		t.Fatalf("Expected error, got %v", err)
 	}
@@ -565,7 +568,7 @@ func TestGetVersion(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	ver, err := GetVersion()
+	ver, err := GetVersion(context.Background())
 	if err != nil {
 		t.Fatalf("GetVersion failed: %v", err)
 	}
@@ -585,7 +588,7 @@ func TestIsComposeInstalled(t *testing.T) {
 	// plugin is a host-environment property, not a code defect — skip
 	// rather than fail so CI / dev machines without compose still run
 	// the rest of the docker package tests cleanly.
-	if !IsComposeInstalled() {
+	if !IsComposeInstalled(context.Background()) {
 		t.Skip("Docker Compose plugin not installed on host")
 	}
 }
@@ -652,7 +655,7 @@ func TestNetworkExists_NonExistent(t *testing.T) {
 	if !IsInstalled() {
 		t.Skip("Docker not installed")
 	}
-	if NetworkExists("nonexistent-network-xyz-999") {
+	if NetworkExists(context.Background(), "nonexistent-network-xyz-999") {
 		t.Error("Nonexistent network should not exist")
 	}
 }
@@ -666,16 +669,16 @@ func TestCreateAndRemoveNetwork(t *testing.T) {
 	// Clean up from any previous failed test
 	_ = Run([]string{"network", "rm", testNet})
 
-	err := CreateNetwork(testNet)
+	err := CreateNetwork(context.Background(), testNet)
 	if err != nil {
 		t.Fatalf("CreateNetwork failed: %v", err)
 	}
-	if !NetworkExists(testNet) {
+	if !NetworkExists(context.Background(), testNet) {
 		t.Error("Network should exist after creation")
 	}
 
 	// Creating again should be idempotent
-	err = CreateNetwork(testNet)
+	err = CreateNetwork(context.Background(), testNet)
 	if err != nil {
 		t.Fatalf("CreateNetwork (idempotent) failed: %v", err)
 	}
@@ -856,7 +859,7 @@ func TestBuildImage_SimpleDockerfile(t *testing.T) {
 }
 
 func TestComposeUpAndDown(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled() {
+	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -876,7 +879,7 @@ func TestComposeUpAndDown(t *testing.T) {
 }
 
 func TestComposeRemove_NoVolumes(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled() {
+	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -892,7 +895,7 @@ func TestComposeRemove_NoVolumes(t *testing.T) {
 }
 
 func TestComposeRemove_WithVolumes(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled() {
+	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -908,7 +911,7 @@ func TestComposeRemove_WithVolumes(t *testing.T) {
 }
 
 func TestComposeLogs(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled() {
+	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
 		t.Skip("Docker/Compose not installed")
 	}
 
@@ -945,7 +948,7 @@ func TestEnsureDocker_AlreadyInstalled(t *testing.T) {
 		os.Stdout = old
 	}()
 
-	err := EnsureDocker()
+	err := EnsureDocker(context.Background())
 	if err != nil {
 		t.Errorf("EnsureDocker should succeed when Docker is installed: %v", err)
 	}
