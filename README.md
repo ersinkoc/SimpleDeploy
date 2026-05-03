@@ -31,8 +31,10 @@ SimpleDeploy is a zero-external-dependency PaaS tool written in Go. Provide a Gi
 ## Quick Start
 
 ```bash
-# Install
-curl -fsSL https://simpledeploy.dev/install | sh
+# Download the latest release (Linux amd64 — adjust OS/arch as needed)
+curl -L -o simpledeploy https://github.com/ersinkoc/SimpleDeploy/releases/latest/download/simpledeploy-linux-amd64
+chmod +x simpledeploy
+sudo mv simpledeploy /usr/local/bin/
 
 # First-time setup
 simpledeploy init
@@ -42,6 +44,8 @@ simpledeploy deploy
 
 # Push to GitHub → auto-deploy!
 ```
+
+See the [Releases](https://github.com/ersinkoc/SimpleDeploy/releases) page for all platforms (Linux, macOS, Windows) and architectures (amd64, arm64).
 
 ## CLI Commands
 
