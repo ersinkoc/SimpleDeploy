@@ -63,8 +63,14 @@ Tests use Go's standard testing package. Key patterns:
 │   ├── buildpack/       # Auto-detection of app type (Node.js, Go, Python, etc.)
 │   ├── config/          # Path constants and configuration
 │   └── runner/          # Self-containerization as Docker service
-└── templates/           # Embedded templates for Dockerfiles and proxy configs
 ```
+
+**There is no template directory.** Dockerfile templates are Go constants in
+`internal/buildpack/detect.go`; proxy and compose output is emitted by
+`internal/proxy/*.go` and `internal/compose/generator.go`. A stale `templates/`
+directory may still exist in old checkouts — it is dead code, is not embedded,
+and must not be edited or revived (its copies lack the validation and escaping
+the real generators perform).
 
 ### Key Components
 
@@ -76,8 +82,11 @@ Tests use Go's standard testing package. Key patterns:
 
 **Configuration** (`internal/config/paths.go`)
 - `BaseDir`: `/opt/simpledeploy` (or `SIMPLEDEPLOY_DIR` env var)
-- `HomeDataDir()`: `~/.simpledeploy` for local state
+- `HomeDataDir()`: `~/.simpledeploy` (or `SIMPLEDEPLOY_STATE_DIR` env var)
 - App data lives in `/opt/simpledeploy/apps/<app-name>/`
+- The two are separate on purpose: the service container bind-mounts both at
+  their host paths and sets both env vars, because `$HOME` inside the container
+  is `/root` and would otherwise resolve state to an unmounted path.
 
 **CLI Routing** (`internal/cli/root.go`)
 - `Route()` function dispatches to command handlers based on first argument
@@ -98,14 +107,31 @@ Tests use Go's standard testing package. Key patterns:
 
 ### Data Flow
 
-1. `simpledeploy init` → Checks Docker, sets up proxy, configures domain/webhook
-2. `simpledeploy deploy` → Detects app type → Clones repo → Generates Dockerfile (if needed) → Builds image → Generates docker-compose.yml → Starts container
-3. `simpledeploy webhook start` → Listens for push events → Verifies signature → Pulls latest → Rebuilds → Redeploys
+1. `simpledeploy init` → Checks Docker **and the compose plugin** → sets up proxy → publishes the `/_qd/*` webhook route through that proxy
+2. `simpledeploy deploy` → Detects app type → Clones repo → Generates Dockerfile + `.dockerignore` (if needed) → Builds image → Generates docker-compose.yml → Starts container → **polls until the container reports `running`**
+3. `simpledeploy webhook start` → Listens for push events → Verifies signature → Pulls latest → Rebuilds → Redeploys → **rolls back to the previous image if the new container exits**
+
+### Invariants worth preserving
+
+- **App containers use `expose`, never `ports`.** A published port bypasses the
+  proxy's TLS and security headers and exposes the app on the public IP.
+- **Generated compose output must be deterministic.** All maps are walked via
+  `sortedKeys`; unsorted iteration made every redeploy rewrite the file.
+- **Cleanup after a CLI command must be synchronous.** Background goroutines
+  launched near the end of a command do not run before the process exits.
+- **`sanitizeOutput` must never be called with an empty needle.**
+  `strings.ReplaceAll` with `""` interleaves the replacement into every
+  character of the input.
+- **A `.env` is assembled once, at the end of the deploy wizard.** Writing
+  partial content earlier gets truncated by the final write.
+- **The webhook server refuses to deploy without a configured secret.** Every
+  signature-verification branch is skipped when the secret is empty.
 
 ### Environment Variables
 
 - `SIMPLEDEPLOY_DIR`: Override base directory (default: `/opt/simpledeploy`)
-- Used in tests to redirect state to temp directories
+- `SIMPLEDEPLOY_STATE_DIR`: Override the state directory (default: `~/.simpledeploy`)
+- Both are used in tests to redirect state to temp directories
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands

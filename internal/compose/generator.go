@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,6 +46,19 @@ type HealthCheckData struct {
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// sortedKeys returns a map's keys in lexical order. Every map walked while
+// emitting YAML goes through this so the generated docker-compose.yml is a
+// pure function of its inputs — reproducible builds, reviewable diffs, and
+// tests that do not depend on Go's randomised map iteration order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // yamlQuote returns a YAML-safe double-quoted string.
 // It escapes special characters and rejects potentially dangerous sequences
@@ -127,7 +141,14 @@ func Generate(data *ComposeData) (string, error) {
 	b.WriteString("    restart: unless-stopped\n")
 	b.WriteString("    networks:\n")
 	b.WriteString("      - simpledeploy\n")
-	b.WriteString("    ports:\n")
+	// `expose`, not `ports`. A bare `ports: - "3000"` publishes the container
+	// port on a RANDOM host port bound to 0.0.0.0, which means every deployed
+	// app was also reachable over plain HTTP directly on the public IP,
+	// bypassing the reverse proxy, its TLS termination, and the security
+	// headers configured below. The proxy reaches the app over the shared
+	// `simpledeploy` bridge network by container name, so no host publishing
+	// is needed at all.
+	b.WriteString("    expose:\n")
 	b.WriteString(fmt.Sprintf("      - \"%d\"\n", data.Port))
 
 	if data.EnvFile != "" {
@@ -136,7 +157,12 @@ func Generate(data *ComposeData) (string, error) {
 
 	if len(data.Environment) > 0 {
 		b.WriteString("    environment:\n")
-		for key, val := range data.Environment {
+		// Sorted: Go map iteration order is randomised per run, so an unsorted
+		// walk produced a different docker-compose.yml on every redeploy even
+		// when nothing changed — noisy diffs, and `docker compose up` seeing a
+		// "changed" config each time.
+		for _, key := range sortedKeys(data.Environment) {
+			val := data.Environment[key]
 			if !envKeyRe.MatchString(key) {
 				return "", fmt.Errorf("invalid environment variable key %q: must match [A-Za-z_][A-Za-z0-9_]*", key)
 			}
@@ -169,7 +195,8 @@ func Generate(data *ComposeData) (string, error) {
 		b.WriteString(fmt.Sprintf("      - \"traefik.http.services.%s.loadbalancer.server.port=%d\"\n", data.AppName, data.Port))
 
 		if len(data.Headers) > 0 {
-			for key, val := range data.Headers {
+			for _, key := range sortedKeys(data.Headers) {
+				val := data.Headers[key]
 				if err := state.ValidateHeaderName(key); err != nil {
 					return "", fmt.Errorf("invalid header name in compose data: %w", err)
 				}
@@ -212,7 +239,8 @@ func Generate(data *ComposeData) (string, error) {
 
 		if len(db.Env) > 0 {
 			b.WriteString("    environment:\n")
-			for key, val := range db.Env {
+			for _, key := range sortedKeys(db.Env) {
+				val := db.Env[key]
 				quoted, err := yamlQuote(val)
 				if err != nil {
 					return "", fmt.Errorf("invalid database environment variable %s: %w", key, err)

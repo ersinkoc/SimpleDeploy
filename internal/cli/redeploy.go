@@ -3,12 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
+	"github.com/ersinkoc/SimpleDeploy/internal/docker"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -93,48 +93,88 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 	}
 
 	// Replace only the app service's image line (first occurrence under the app name)
-	newCompose := replaceAppImage(string(composeData), appName, imageTag)
-	if err := osWriteFile(composePath, []byte(newCompose), 0644); err != nil {
+	previousCompose := string(composeData)
+	newCompose := replaceAppImage(previousCompose, appName, imageTag)
+	// 0600, matching compose.WriteCompose: the file embeds database root
+	// passwords in the db services' environment blocks. os.WriteFile only
+	// applies perm when it creates the file, so on an existing deployment this
+	// is a no-op — but if the compose file was ever recreated (restored from a
+	// backup, or a future code path), 0644 would have silently published those
+	// credentials to every user on the host.
+	if err := osWriteFile(composePath, []byte(newCompose), 0600); err != nil {
 		return fmt.Errorf("failed to update compose: %w", err)
 	}
 
+	// rollbackCompose restores the previous image reference. Called on any
+	// failure after the compose file has been rewritten, so a failed redeploy
+	// leaves the app pointing at the image that was last known to work rather
+	// than at one that will not start.
+	rollbackCompose := func() {
+		if err := osWriteFile(composePath, []byte(previousCompose), 0600); err != nil {
+			wizard.Warn("Failed to restore previous compose file: " + err.Error())
+			return
+		}
+		if err := dockerComposeUp(context.Background(), appDir); err != nil {
+			wizard.Warn("Rollback failed to restart previous version: " + err.Error())
+			return
+		}
+		wizard.Info("Rolled back to previous image " + app.CurrentImage)
+	}
+
 	if err := ctx.Err(); err != nil {
+		rollbackCompose()
 		return fmt.Errorf("redeploy cancelled before compose up: %w", err)
 	}
 
 	// Restart
 	wizard.Info("Restarting containers...")
 	if err := dockerComposeUp(ctx, appDir); err != nil {
+		rollbackCompose()
 		return fmt.Errorf("failed to restart: %w", err)
 	}
-	wizard.Success("Containers restarted")
 
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("redeploy cancelled before caddy reload: %w", err)
+	// Verify the new container actually came up. Previously the status was set
+	// to "running" unconditionally, so a redeploy that shipped a crashing image
+	// reported success and `simpledeploy list` kept claiming the app was
+	// healthy — worst of all on the webhook path, which runs unattended.
+	//
+	// Only a definitive failure triggers rollback. If the state cannot be read
+	// at all (Docker unreachable) or the container is simply absent, we warn
+	// and record "error" instead: rolling back on an inconclusive reading
+	// risks tearing down a deployment that is actually fine.
+	containerName := docker.ContainerName(appName)
+	status := waitForContainer(context.Background(), containerName, containerStartTimeout)
+	confirmedRunning := status == "running"
+	switch {
+	case confirmedRunning:
+		wizard.Success("Containers restarted")
+	case isFailedContainerState(status):
+		rollbackCompose()
+		return fmt.Errorf("new container %s is %q after deploy; rolled back to %s — check 'simpledeploy logs %s'",
+			containerName, status, app.CurrentImage, appName)
+	default:
+		wizard.Warn(fmt.Sprintf("Could not confirm %s is running (state: %q). Check 'simpledeploy logs %s'.",
+			containerName, status, appName))
 	}
 
-	// Reload Caddy if applicable
+	// Reload Caddy if applicable. Not fatal — the app is already serving; a
+	// stale proxy config only matters if the route changed, which redeploy
+	// does not do.
 	if cfg.Proxy == "caddy" {
 		if err := proxyReloadCaddy(); err != nil {
 			wizard.Warn("Failed to reload Caddy: " + err.Error())
 		}
 	}
 
-	// Cleanup old images (keep last 3) in the background so a slow docker
-	// listing doesn't delay redeploy completion. The goroutine is wrapped
-	// in a recover so a panic in image listing doesn't crash the CLI.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
-			}
-		}()
-		dockerCleanupOldImages(ctx, appName, 3)
-	}()
-
-	// Update state
+	// Update state. Derived from this run's observation, not from the stored
+	// value — an app previously marked "error" must be able to recover to
+	// "running", and one we could not verify must not be claimed healthy.
 	app.CurrentImage = imageTag
-	app.Status = "running"
+	if confirmedRunning {
+		app.Status = "running"
+	} else {
+		app.Status = "error"
+	}
 	app.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	app.DeployCount++
 	if err := stateSaveApp(app); err != nil {
@@ -143,8 +183,33 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 
 	logDeploy(appDir, appName, imageTag)
 
+	// Prune old images LAST and synchronously. This used to run in a
+	// fire-and-forget goroutine, which in a CLI invocation almost never got
+	// scheduled before the process exited — so images accumulated forever and
+	// eventually filled the disk. It is cheap (one `docker images` plus a few
+	// `docker rmi`) and failures here are cosmetic.
+	pruneImages(appName, keepImages)
+
 	wizard.Success(fmt.Sprintf("%s redeployed successfully!", appName))
 	return nil
+}
+
+// keepImages is how many previously-built images per app survive a prune.
+// Enough to roll back by hand a couple of times without unbounded growth.
+const keepImages = 3
+
+// pruneImages removes an app's older images, never failing the caller.
+// Disk hygiene must not be able to fail a deploy that has already succeeded,
+// so both errors and panics from the docker layer are downgraded to warnings.
+func pruneImages(appName string, keep int) {
+	defer func() {
+		if r := recover(); r != nil {
+			wizard.Warn(fmt.Sprintf("Image cleanup for %s panicked: %v", appName, r))
+		}
+	}()
+	if err := dockerCleanupOldImages(context.Background(), appName, keep); err != nil {
+		wizard.Warn("Failed to prune old images: " + err.Error())
+	}
 }
 
 // replaceAppImage replaces only the app service's image line in compose content.

@@ -1853,57 +1853,40 @@ func TestRunDeploy_CancelDeploy(t *testing.T) {
 	})
 }
 
-// TestValidateEnvPath_Security tests that validateEnvPath prevents path traversal attacks.
-func TestValidateEnvPath_Security(t *testing.T) {
-	// Create a temp directory to use as base
-	baseDir := t.TempDir()
+// TestValidateEnvSourcePath_ConfinementWasDeliberatelyDropped documents why the
+// predecessor of this check (validateEnvPath, which required the file to sit
+// inside the app's own directory) is gone, so nobody reinstates it.
+//
+// The confinement made the "import an existing .env" branch dead code: the base
+// directory it compared against was the app directory SimpleDeploy had just
+// created seconds earlier, which by construction never contained the operator's
+// file. Every real path was rejected and the wizard silently fell through to a
+// warning.
+//
+// It also bought no security. The only caller is the interactive deploy wizard,
+// driven by the same root-equivalent operator who could read the file with
+// `cat`; webhook-triggered redeploys never reach this code. What remains is the
+// check that actually prevents confusing downstream failures: the path must
+// name a readable regular file, and must not be the destination itself.
+func TestValidateEnvSourcePath_ConfinementWasDeliberatelyDropped(t *testing.T) {
+	// A file well outside any SimpleDeploy-managed directory.
+	outside := filepath.Join(t.TempDir(), "operator.env")
+	if err := os.WriteFile(outside, []byte("SECRET=1\n"), 0600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	appEnv := filepath.Join(t.TempDir(), "apps", "myapp", ".env")
 
-	tests := []struct {
-		name       string
-		customPath string
-		wantErr    bool
-	}{
-		{
-			name:       "Valid path within base dir",
-			customPath: filepath.Join(baseDir, "app", ".env"),
-			wantErr:    false,
-		},
-		{
-			name:       "Path traversal with double dots",
-			customPath: filepath.Join(baseDir, "..", "..", "etc", "passwd"),
-			wantErr:    true,
-		},
-		{
-			name:       "Path traversal with double dots in middle",
-			customPath: filepath.Join(baseDir, "apps", "..", "..", "etc", "passwd"),
-			wantErr:    true,
-		},
-		{
-			name:       "Absolute path outside base",
-			customPath: "/etc/passwd",
-			wantErr:    true,
-		},
-		{
-			name:       "Valid nested path",
-			customPath: filepath.Join(baseDir, "apps", "myapp", ".env"),
-			wantErr:    false,
-		},
-		{
-			name:       "Relative path that escapes base",
-			customPath: "../etc/passwd",
-			wantErr:    true,
-		},
+	resolved, err := validateEnvSourcePath(outside, appEnv)
+	if err != nil {
+		t.Fatalf("a path outside the app dir must be accepted; confinement was the bug, not the fix: %v", err)
+	}
+	if !filepath.IsAbs(resolved) {
+		t.Errorf("resolved = %q, want an absolute path", resolved)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateEnvPath(tt.customPath, baseDir)
-			if tt.wantErr && err == nil {
-				t.Errorf("validateEnvPath(%q, %q) expected error, got nil", tt.customPath, baseDir)
-			}
-			if !tt.wantErr && err != nil {
-				t.Errorf("validateEnvPath(%q, %q) expected no error, got: %v", tt.customPath, baseDir, err)
-			}
-		})
+	// Traversal syntax is not special-cased either — what matters is only
+	// whether the resolved path names a readable regular file.
+	if _, err := validateEnvSourcePath(filepath.Join(outside, "..", "nope.env"), appEnv); err == nil {
+		t.Error("a path that resolves to a nonexistent file must still be rejected")
 	}
 }

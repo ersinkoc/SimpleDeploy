@@ -2,10 +2,24 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
+
+// sortedAppNames returns the app names in a state map in a stable order.
+// Go randomises map iteration, so `list` and `status` reshuffled their output
+// on every invocation — which makes the tool feel broken and makes diffing two
+// runs impossible.
+func sortedAppNames[T any](apps map[string]T) []string {
+	names := make([]string, 0, len(apps))
+	for name := range apps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 func RunList() error {
 	s, err := stateLoad()
@@ -22,7 +36,8 @@ func RunList() error {
 	wizard.Header("Applications")
 	fmt.Println()
 
-	for name, app := range s.Apps {
+	for _, name := range sortedAppNames(s.Apps) {
+		app := s.Apps[name]
 		statusIcon := "●"
 		switch app.Status {
 		case "running":

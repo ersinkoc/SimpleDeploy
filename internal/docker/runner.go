@@ -64,10 +64,17 @@ func ComposeRemove(ctx context.Context, composeDir string, volumes bool) error {
 	return nil
 }
 
+// logTailLines bounds a non-following log dump. Without it `docker compose
+// logs` prints the container's entire history, which for a long-running app
+// can be hundreds of megabytes scrolling past the operator.
+const logTailLines = "200"
+
 func ComposeLogs(ctx context.Context, composeDir, serviceName string, follow bool) error {
 	args := []string{"compose", "logs"}
 	if follow {
-		args = append(args, "-f")
+		args = append(args, "-f", "--tail", logTailLines)
+	} else {
+		args = append(args, "--tail", logTailLines)
 	}
 	if serviceName != "" {
 		args = append(args, serviceName)

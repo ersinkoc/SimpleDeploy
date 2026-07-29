@@ -1,8 +1,11 @@
-.PHONY: build test clean release docker docker-build docker-push lint
+.PHONY: build test test-coverage race clean release docker docker-build docker-push lint verify fmt
 
 BINARY := simpledeploy
-VERSION := 0.0.8
-LDFLAGS := -s -w
+VERSION := 0.1.0
+MODULE  := github.com/ersinkoc/SimpleDeploy
+# -X stamps the version into the binary so `simpledeploy version` always
+# matches this file. Without it the two drifted apart silently.
+LDFLAGS := -s -w -X $(MODULE)/internal/cli.version=$(VERSION)
 REGISTRY := ghcr.io/ersinkoc
 
 build:
@@ -17,6 +20,18 @@ test-coverage:
 
 lint:
 	go vet ./...
+
+fmt:
+	gofmt -w .
+
+# Race detector — matches .github/workflows/race.yml
+race:
+	go test -race -p=1 -count=1 ./...
+
+# Everything CI runs, plus a binary smoke test. Reports all failures, not just
+# the first. Run this before pushing.
+verify:
+	sh scripts/verify.sh
 
 clean:
 	rm -f $(BINARY) coverage.out

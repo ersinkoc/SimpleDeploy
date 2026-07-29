@@ -69,7 +69,8 @@ func RunInit() error {
 		}
 		webhookSecret = secret
 		wizard.Success("Webhook secret: " + webhookSecret)
-		wizard.Info("Store this secret securely — it won't be shown again")
+		wizard.Info("Paste this into your repository's webhook settings.")
+		wizard.Info("You can see it again after a deploy, or in " + getStateDir() + "/state.json")
 	} else {
 		webhookSecret = wizard.AskRequired("Enter webhook secret")
 	}
@@ -109,6 +110,31 @@ func RunInit() error {
 		}
 	}
 
+	// 7. Publish the webhook endpoint through the proxy. Without this the
+	// https://<domain>/_qd/webhook/<app> URL the deploy wizard hands out has
+	// nothing serving it. Non-fatal: the rest of SimpleDeploy works fine
+	// without push-to-deploy, so warn rather than abort a successful install.
+	if err := proxySetupWebhookRoute(proxyType, baseDomain, webhookPort); err != nil {
+		wizard.Warn("Failed to publish webhook route: " + err.Error())
+		wizard.Warn("Push-to-deploy will not work until this is resolved.")
+	} else {
+		if proxyType == "caddy" {
+			if err := proxyReloadCaddy(); err != nil {
+				wizard.Warn("Failed to reload Caddy: " + err.Error())
+			}
+		} else {
+			// Traefik's file provider watches /dynamic, so the route is picked
+			// up without a restart — but the mount and the provider flag are
+			// new if this is a re-init over an older install, and those only
+			// take effect on recreate.
+			if err := proxyRestartTraefik(); err != nil {
+				wizard.Warn("Failed to restart Traefik: " + err.Error())
+			}
+		}
+		wizard.Success(fmt.Sprintf("Webhook endpoint published at https://%s/_qd/", baseDomain))
+		wizard.Info(fmt.Sprintf("Point an A record for %s at this server (in addition to the wildcard).", baseDomain))
+	}
+
 	// Summary
 	fmt.Println()
 	wizard.Success("SimpleDeploy initialized successfully!")
@@ -117,7 +143,10 @@ func RunInit() error {
 	fmt.Printf("  Domain:  %s\n", baseDomain)
 	fmt.Printf("  Webhook: :%d\n", webhookPort)
 	fmt.Println()
-	fmt.Println("Run 'simpledeploy deploy' to deploy your first application.")
+	fmt.Println("Next steps:")
+	fmt.Println("  1. simpledeploy deploy         — deploy your first application")
+	fmt.Println("  2. simpledeploy webhook start  — run the push-to-deploy listener")
+	fmt.Println("     (or 'simpledeploy service install' to run it as a container)")
 
 	return nil
 }

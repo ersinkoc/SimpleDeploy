@@ -7,7 +7,16 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
-const version = "0.0.8"
+// version is overridable at link time so the binary, the Makefile, and the
+// release workflow cannot drift apart:
+//
+//	go build -ldflags "-X github.com/ersinkoc/SimpleDeploy/internal/cli.version=1.2.3"
+//
+// The literal below is the fallback for a plain `go build`.
+var version = "0.1.0"
+
+// Version returns the running binary's version string.
+func Version() string { return version }
 
 func PrintUsage() {
 	fmt.Printf("SimpleDeploy v%s — Single-Binary PaaS CLI\n", version)
@@ -15,26 +24,34 @@ func PrintUsage() {
 	fmt.Println()
 	fmt.Println("Usage: simpledeploy <command> [arguments]")
 	fmt.Println()
-	fmt.Println("Commands:")
+	fmt.Println("Setup:")
 	fmt.Println("  init                First-time setup (interactive wizard)")
+	fmt.Println("  status              Show proxy and application status")
+	fmt.Println()
+	fmt.Println("Applications:")
 	fmt.Println("  deploy              Deploy a new application (interactive)")
 	fmt.Println("  list                List deployed applications")
-	fmt.Println("  redeploy <app>      Redeploy an application")
-	fmt.Println("  remove <app>        Remove an application")
-	fmt.Println("  restart <app>       Restart an application")
+	fmt.Println("  redeploy <app>      Rebuild and restart an application")
+	fmt.Println("  restart <app>       Restart an application's container")
 	fmt.Println("  stop <app>          Stop an application")
-	fmt.Println("  exec <app> <cmd>    Execute command in app container")
-	fmt.Println("  logs <app>          Show application logs")
-	fmt.Println("  status              Show SimpleDeploy status")
-	fmt.Println("  service <action>    Manage SimpleDeploy service (install|start|stop)")
-	fmt.Println("  webhook start       Start webhook server")
+	fmt.Println("  remove <app>        Remove an application and its files")
+	fmt.Println("  logs <app> [-f]     Show application logs (-f to follow)")
+	fmt.Println("  exec <app> <cmd>    Run a command inside the app container")
+	fmt.Println()
+	fmt.Println("Push-to-deploy:")
+	fmt.Println("  webhook start       Run the webhook listener in the foreground")
+	fmt.Println("  service install     Generate compose to run the listener as a container")
+	fmt.Println("  service start|stop  Start or stop that container")
+	fmt.Println()
+	fmt.Println("Other:")
 	fmt.Println("  version             Show version")
+	fmt.Println("  help                Show this message")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  simpledeploy init")
 	fmt.Println("  simpledeploy deploy")
 	fmt.Println("  simpledeploy redeploy myapp")
-	fmt.Println("  simpledeploy logs myapp")
+	fmt.Println("  simpledeploy logs myapp -f")
 }
 
 func Route(args []string) error {

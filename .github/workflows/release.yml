@@ -9,7 +9,44 @@ permissions:
   contents: write
 
 jobs:
+  # Gate. The release job used to build and publish straight from the tag with
+  # no verification at all, so a tag pushed on a broken commit shipped broken
+  # binaries to everyone who runs install.sh. Nothing is built until this passes.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -p=1 -count=1 ./...
+        timeout-minutes: 15
+
+      - name: Test with race detector
+        run: go test -race -p=1 -count=1 ./...
+        timeout-minutes: 30
+
+      # A release whose version is undocumented is a release nobody can reason
+      # about later. Cheap to check, and it catches the common mistake of
+      # tagging before updating the changelog.
+      - name: Changelog has an entry for this tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section for tag ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "Found changelog entry for ${VERSION}"
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -37,12 +74,32 @@ jobs:
         with:
           go-version: '1.23'
 
+      # Stamp the git tag into the binary so `simpledeploy version` reports the
+      # release it actually came from rather than whatever literal happened to
+      # be committed in root.go.
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o simpledeploy-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} .
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -ldflags "-s -w -X github.com/ersinkoc/SimpleDeploy/internal/cli.version=${VERSION}" \
+            -o simpledeploy-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} .
+
+      # Confirm the stamp actually landed. A silently-wrong -X path (the symbol
+      # must name a string *variable*, not a constant) fails quietly and ships a
+      # binary reporting the wrong version.
+      - name: Verify version stamp
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          GOT=$(./simpledeploy-linux-amd64 version)
+          echo "$GOT"
+          if ! echo "$GOT" | grep -q "v${VERSION}"; then
+            echo "::error::binary reports '${GOT}', expected v${VERSION}"
+            exit 1
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -62,8 +119,28 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Published so users (and install.sh) can verify what they downloaded.
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum simpledeploy-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Print the section for this version: from its heading up to the next
+          # "## [" heading, exclusive.
+          awk -v ver="## [${VERSION}]" '
+            index($0, ver) == 1 { inside = 1; next }
+            inside && /^## \[/   { exit }
+            inside               { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          echo "--- release notes ---"
+          cat RELEASE_NOTES.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md

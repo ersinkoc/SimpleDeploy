@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
 
 	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
@@ -73,15 +72,12 @@ func RunRemove(args []string) error {
 		return fmt.Errorf("failed to remove app from state: %w", err)
 	}
 
-	// Cleanup images
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "warning: image cleanup panicked: %v\n", r)
-			}
-		}()
-		dockerCleanupOldImages(context.Background(), appName, 0)
-	}()
+	// Remove this app's images. Done synchronously: the previous background
+	// goroutine was launched microseconds before the CLI process exited, so it
+	// effectively never ran and every removed app left its images behind.
+	// pruneImages downgrades errors and panics to warnings — the app is
+	// already gone from state, so leftover images must not fail the command.
+	pruneImages(appName, 0)
 
 	wizard.Success(fmt.Sprintf("Application '%s' removed", appName))
 	return nil

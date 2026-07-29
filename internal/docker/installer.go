@@ -47,22 +47,28 @@ func Install() error {
 }
 
 func EnsureDocker(ctx context.Context) error {
-	if IsInstalled() {
+	if !IsInstalled() {
+		if !wizardConfirm("Docker not found. Install it?", true) {
+			return fmt.Errorf("Docker is required to continue")
+		}
+		if err := Install(); err != nil {
+			return err
+		}
+	} else {
 		ver, _ := GetVersion(ctx)
 		wizard.Success(fmt.Sprintf("%s detected", ver))
-		return nil
 	}
 
-	if !wizardConfirm("Docker not found. Install it?", true) {
-		return fmt.Errorf("Docker is required to continue")
-	}
-
-	if err := Install(); err != nil {
-		return err
-	}
-
+	// Check the compose plugin on BOTH paths. Previously this only ran after a
+	// fresh install, so a host that already had the Docker engine but not the
+	// compose plugin passed `init` cleanly and then failed at the first
+	// deploy with a raw "docker: 'compose' is not a docker command" — after
+	// the proxy had already been configured.
 	if !IsComposeInstalled(ctx) {
-		wizard.Info("Docker Compose not found. Please install the Docker Compose plugin.")
+		wizard.Fail("Docker Compose plugin not found.")
+		wizard.Info("Install it with your package manager, e.g.:")
+		wizard.Info("  apt-get install docker-compose-plugin   (Debian/Ubuntu)")
+		wizard.Info("  dnf install docker-compose-plugin       (Fedora/RHEL)")
 		return fmt.Errorf("Docker Compose plugin is required")
 	}
 

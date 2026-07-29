@@ -78,6 +78,23 @@ func RunDeploy() error {
 		return fmt.Errorf("failed to create app directory: %w", err)
 	}
 
+	// Everything from here to the final state save is one transaction. If any
+	// step fails — or the operator declines the final confirmation — the app
+	// directory must go: it holds the cloned source and a .env carrying the
+	// generated database passwords, and nothing in state.json points at it, so
+	// leaving it behind means orphaned credentials on disk and a stale `source`
+	// tree that makes the next `deploy` of the same name fail at git clone.
+	// Only the build-failure path used to clean up; every other early return
+	// leaked.
+	deployed := false
+	defer func() {
+		if !deployed {
+			if err := osRemoveAll(appDir); err != nil {
+				wizard.Warn(fmt.Sprintf("Failed to clean up %s after aborted deploy: %v", appDir, err))
+			}
+		}
+	}()
+
 	wizard.Info("Cloning repository...")
 	gitToken := app.GitToken
 	if private {
@@ -150,19 +167,25 @@ func RunDeploy() error {
 	fmt.Println()
 	envVars := wizard.AskMultiple("Environment variables (KEY=VALUE)")
 	envPath := filepath.Join(appDir, ".env")
-	if wizard.Confirm(".env file exists?", false) {
+
+	// importedEnv holds the verbatim contents of a .env the operator asked us
+	// to import. It is NOT written to disk here: the final .env is assembled
+	// once, at the end of the wizard, from this content plus the generated
+	// variables. Writing it early — as the previous version did — meant the
+	// closing osWriteFile of generated vars silently truncated the file and
+	// discarded every imported value.
+	var importedEnv []byte
+	if wizard.Confirm("Import an existing .env file?", false) {
 		customPath := wizard.Ask(".env path", "")
 		if customPath != "" {
-			// Security: Validate path to prevent path traversal
-			if err := validateEnvPath(customPath, appDir); err != nil {
+			resolved, err := validateEnvSourcePath(customPath, envPath)
+			if err != nil {
 				wizard.Warn(fmt.Sprintf("Invalid .env path: %v", err))
+			} else if data, err := osReadFile(resolved); err != nil {
+				wizard.Warn("Could not read .env file: " + err.Error())
 			} else {
-				data, err := osReadFile(customPath)
-				if err != nil {
-					wizard.Warn("Could not read .env file: " + err.Error())
-				} else if err := osWriteFile(envPath, data, 0600); err != nil {
-					wizard.Warn("Failed to write .env: " + err.Error())
-				}
+				importedEnv = data
+				wizard.Success(fmt.Sprintf("Imported %d bytes from %s", len(data), resolved))
 			}
 		}
 	}
@@ -251,20 +274,33 @@ func RunDeploy() error {
 	extraHeaders := wizard.AskMultiple("Extra headers (Header-Name: value)")
 	for _, h := range extraHeaders {
 		kv := strings.SplitN(h, ":", 2)
-		if len(kv) == 2 {
-			app.Headers[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		if len(kv) != 2 {
+			wizard.Warn(fmt.Sprintf("Ignoring malformed header %q (expected 'Name: value')", h))
+			continue
 		}
+		name := strings.TrimSpace(kv[0])
+		value := strings.TrimSpace(kv[1])
+		// Validate here rather than letting compose.Generate / AddCaddyApp
+		// reject it later: those run AFTER the Docker image has been built,
+		// so a typo'd header name used to cost a full build before failing.
+		if err := state.ValidateHeaderName(name); err != nil {
+			wizard.Warn(fmt.Sprintf("Ignoring header %q: %v", name, err))
+			continue
+		}
+		if err := state.ValidateHeaderValue(value); err != nil {
+			wizard.Warn(fmt.Sprintf("Ignoring header %q: %v", name, err))
+			continue
+		}
+		app.Headers[name] = value
 	}
 
 	// 9. Webhook
 	fmt.Println()
-	app.WebhookEnabled = wizard.Confirm("Enable GitHub webhook auto-deploy?", true)
-	if app.WebhookEnabled {
-		webhookURL := fmt.Sprintf("https://%s/_qd/webhook/%s", cfg.BaseDomain, app.Name)
-		wizard.Info("Webhook URL: " + webhookURL)
-		wizard.Info("Add this URL to your repository Settings -> Webhooks")
-		wizard.Info("Event: push (branch: " + app.Branch + ")")
-	}
+	// Setup instructions are printed after a successful deploy (see
+	// printWebhookHelp) rather than here — at this point the deploy can still
+	// fail, and handing the operator a webhook URL for an app that never came
+	// up is worse than saying nothing.
+	app.WebhookEnabled = wizard.Confirm("Enable push-to-deploy webhook?", true)
 
 	// Summary
 	fmt.Println()
@@ -284,17 +320,8 @@ func RunDeploy() error {
 		return nil
 	}
 
-	// Write .env with restricted permissions
-	var envLines []string
-	keys := make([]string, 0, len(envMap))
-	for k := range envMap {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		envLines = append(envLines, fmt.Sprintf("%s=%s", k, envMap[k]))
-	}
-	if err := osWriteFile(envPath, []byte(strings.Join(envLines, "\n")), 0600); err != nil {
+	// Write .env with restricted permissions.
+	if err := osWriteFile(envPath, renderEnvFile(importedEnv, envMap), 0600); err != nil {
 		return fmt.Errorf("failed to write .env: %w", err)
 	}
 
@@ -302,8 +329,8 @@ func RunDeploy() error {
 	wizard.Info("Building Docker image...")
 	imageTag, err := dockerBuildImage(context.Background(), sourceDir, app.Name)
 	if err != nil {
-		// Clean up app directory on build failure (contains .env with credentials)
-		osRemoveAll(appDir)
+		// The deferred cleanup above removes the app directory (and the .env
+		// holding the generated DB credentials) on this path.
 		return fmt.Errorf("build failed: %w", err)
 	}
 	wizard.Success("Image built: " + imageTag)
@@ -332,10 +359,12 @@ func RunDeploy() error {
 	}
 	wizard.Success("Containers started")
 
-	// Verify container is actually running
+	// Verify the container is actually running. A single check after a fixed
+	// 2 s sleep raced against slow-starting images (it reported "created" for
+	// anything that had not finished starting yet); poll instead so a healthy
+	// app is not flagged as broken and a genuinely crashed one is still caught.
 	containerName := docker.ContainerName(app.Name)
-	time.Sleep(2 * time.Second)
-	containerStatus, _ := dockerContainerStatus(context.Background(), containerName)
+	containerStatus := waitForContainer(context.Background(), containerName, containerStartTimeout)
 	if containerStatus != "running" {
 		wizard.Warn(fmt.Sprintf("Container %s is %q (expected running). Check logs with 'simpledeploy logs %s'", containerName, containerStatus, app.Name))
 		app.Status = "error"
@@ -361,12 +390,66 @@ func RunDeploy() error {
 	if err := stateSaveApp(app); err != nil {
 		return fmt.Errorf("failed to save app state: %w", err)
 	}
+	// State now references the app directory, so the deferred cleanup must
+	// not remove it. Use `simpledeploy remove` to tear the app down instead.
+	deployed = true
 
 	logDeploy(appDir, app.Name, imageTag)
 
 	fmt.Println()
 	wizard.Success(fmt.Sprintf("https://%s is ready!", app.Domain))
+	if app.WebhookEnabled {
+		printWebhookHelp(cfg, app.Name, app.Branch)
+	}
 	return nil
+}
+
+// containerStartTimeout bounds how long we wait for a freshly started
+// container to report "running". Generous enough for a heavy image's
+// entrypoint, short enough that a crash-looping container surfaces while the
+// operator is still watching.
+const containerStartTimeout = 30 * time.Second
+
+// Container states that mean "this is not coming up" — a container that ran
+// its entrypoint and stopped, or one the daemon considers unrecoverable.
+// Distinguished from transient states ("created", "restarting", "paused")
+// which are worth polling through, and from "not found"/lookup errors which
+// mean we could not determine anything at all.
+func isFailedContainerState(status string) bool {
+	return status == "exited" || status == "dead"
+}
+
+// waitForContainer polls a container's state until it is "running", reaches a
+// terminal failure state, or the budget expires. It returns the last state
+// observed, or "unknown" if the state could never be read.
+//
+// Replaces a single check after a fixed 2 s sleep, which reported "created"
+// for any image whose entrypoint had not finished starting and so flagged
+// perfectly healthy deploys as broken.
+func waitForContainer(ctx context.Context, containerName string, budget time.Duration) string {
+	deadline := time.Now().Add(budget)
+	for {
+		status, err := dockerContainerStatus(ctx, containerName)
+		switch {
+		case err != nil:
+			// Docker itself is unreachable. Retrying will not help and we must
+			// not block the deploy on it — report "unknown" so the caller
+			// treats the result as unverified rather than as a failure.
+			return "unknown"
+		case status == "running":
+			return status
+		case status == "not found":
+			// compose up reported success, so the container should exist. It
+			// does not — nothing to poll for.
+			return status
+		case isFailedContainerState(status):
+			return status
+		}
+		if time.Now().After(deadline) {
+			return status
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func mapDetectedDefault(appType string) int {
@@ -408,7 +491,7 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 			Env:        make(map[string]string),
 		}
 
-		for envKey := range dbCfg.Env {
+		for envKey, staticVal := range dbCfg.Env {
 			switch envKey {
 			case "MYSQL_ROOT_PASSWORD", "MARIADB_ROOT_PASSWORD", "POSTGRES_PASSWORD", "MONGO_INITDB_ROOT_PASSWORD":
 				if cred, ok := app.DBCredentials[dbType]; ok {
@@ -419,6 +502,17 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 				}
 			case "MYSQL_DATABASE", "MARIADB_DATABASE", "POSTGRES_DB":
 				dbSvc.Env[envKey] = app.Name
+			default:
+				// Pass through any key the provisioner defines with a fixed
+				// value (e.g. MONGO_INITDB_ROOT_USERNAME). Previously the
+				// switch silently dropped every key it did not enumerate,
+				// which is why the mongo container never received its
+				// required username and refused to start. Keys with an empty
+				// static value are placeholders for generated secrets and are
+				// handled by the cases above, so they stay skipped here.
+				if staticVal != "" {
+					dbSvc.Env[envKey] = staticVal
+				}
 			}
 		}
 
@@ -476,36 +570,93 @@ func logDeploy(appDir, appName, imageTag string) {
 
 var sanitizeNameRe = regexp.MustCompile(`[^a-z0-9-]`)
 
-// validateEnvPath validates that the custom .env path is within the allowed base directory
-// and does not contain path traversal sequences.
-func validateEnvPath(customPath, baseDir string) error {
-	// Clean the path to resolve any . or .. sequences
+// renderEnvFile assembles the app's .env from an optional imported file plus
+// the variables SimpleDeploy generated (wizard input and database connection
+// strings).
+//
+// Ordering is load-bearing: both docker-compose and every dotenv parser apply
+// assignments top-to-bottom, so the generated block goes LAST and therefore
+// wins any key collision. That is the behaviour we want — a stale DATABASE_URL
+// copied in from an old .env must not shadow the connection string for the
+// database SimpleDeploy just provisioned.
+//
+// Generated keys are emitted in sorted order so redeploying an unchanged app
+// produces a byte-identical file.
+func renderEnvFile(imported []byte, generated map[string]string) []byte {
+	var b strings.Builder
+
+	if len(imported) > 0 {
+		b.WriteString("# --- imported from operator-supplied .env ---\n")
+		b.Write(imported)
+		if !strings.HasSuffix(string(imported), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	if len(generated) > 0 {
+		if len(imported) > 0 {
+			b.WriteString("# --- generated by SimpleDeploy (overrides the above) ---\n")
+		}
+		keys := make([]string, 0, len(generated))
+		for k := range generated {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			b.WriteString(fmt.Sprintf("%s=%s\n", k, generated[k]))
+		}
+	}
+
+	return []byte(b.String())
+}
+
+// validateEnvSourcePath resolves and checks the path of a .env file the
+// operator asked to import.
+//
+// This deliberately does NOT confine the path to a base directory. The
+// previous implementation required the file to live inside the app's own
+// directory — which SimpleDeploy had just created moments earlier and which
+// therefore never contained the operator's file — so the "I already have a
+// .env" branch could not succeed for any realistic input and always fell
+// through to a warning. Confinement also bought nothing: the only caller is
+// the interactive deploy wizard, driven by the same root-equivalent operator
+// who could `cat` the file anyway. Webhook-triggered redeploys never reach
+// this code.
+//
+// What is still checked is that the path names a readable regular file — a
+// directory or device node would otherwise produce a confusing failure much
+// later — and that it is not the destination itself, which would truncate
+// the file mid-copy.
+func validateEnvSourcePath(customPath, destPath string) (string, error) {
+	if strings.TrimSpace(customPath) == "" {
+		return "", fmt.Errorf("path cannot be empty")
+	}
+
 	absPath, err := filepath.Abs(customPath)
 	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
+	absPath = filepath.Clean(absPath)
+
+	if absDest, err := filepath.Abs(destPath); err == nil {
+		if filepath.Clean(absDest) == absPath {
+			return "", fmt.Errorf("source and destination are the same file")
+		}
 	}
 
-	// Get absolute path of base directory
-	absBase, err := filepath.Abs(baseDir)
+	info, err := osStat(absPath)
 	if err != nil {
-		return fmt.Errorf("invalid base directory: %w", err)
+		return "", fmt.Errorf("cannot read %s: %w", absPath, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory, not a .env file", absPath)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is not a regular file", absPath)
 	}
 
-	// Ensure the path is within the base directory
-	cleanPath := filepath.Clean(absPath)
-	cleanBase := filepath.Clean(absBase)
-
-	// Check for path traversal - path must start with base directory
-	if !strings.HasPrefix(cleanPath+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
-		return fmt.Errorf("path traversal detected: path must be within %s", baseDir)
-	}
-
-	// Additional check: ensure path doesn't contain .. after cleaning
-	if strings.Contains(cleanPath, "..") {
-		return fmt.Errorf("path contains invalid sequence: %s", cleanPath)
-	}
-
-	return nil
+	return absPath, nil
 }
 
 // sanitizeDefaultName converts a repo-derived name into a safe default app name.

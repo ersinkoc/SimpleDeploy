@@ -9,6 +9,12 @@ import (
 
 var generatePassword = state.GeneratePassword
 
+// MongoRootUser is the username the mongo entrypoint provisions and that the
+// generated connection string authenticates with. Exported so the compose
+// builder can emit MONGO_INITDB_ROOT_USERNAME without hardcoding the literal
+// in a second place.
+const MongoRootUser = "root"
+
 type DatabaseConfig struct {
 	Type         string
 	Image        string
@@ -71,6 +77,12 @@ var databaseDefs = map[string]DatabaseConfig{
 		Type:  "mongodb",
 		Image: "mongo:7",
 		Env: map[string]string{
+			// The mongo entrypoint aborts on startup unless BOTH of these are
+			// set — supplying only the password made every mongodb deploy fail
+			// with "MONGO_INITDB_ROOT_USERNAME and MONGO_INITDB_ROOT_PASSWORD
+			// must both be provided". The username is fixed at "root" to match
+			// ConnTemplate below.
+			"MONGO_INITDB_ROOT_USERNAME": MongoRootUser,
 			"MONGO_INITDB_ROOT_PASSWORD": "",
 		},
 		Volume: "/data/db",
@@ -80,7 +92,10 @@ var databaseDefs = map[string]DatabaseConfig{
 			"timeout":  "5s",
 			"retries":  5,
 		},
-		ConnTemplate: "mongodb://root:%s@qd-%s-mongodb:27017/%s",
+		// authSource=admin is required: the root user created by the entrypoint
+		// lives in the `admin` database, not in the per-app database named in
+		// the path, so authentication fails without it.
+		ConnTemplate: "mongodb://" + MongoRootUser + ":%s@qd-%s-mongodb:27017/%s?authSource=admin",
 	},
 	"redis": {
 		Type:         "redis",

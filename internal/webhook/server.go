@@ -37,7 +37,12 @@ type rateLimiter struct {
 }
 
 type visitor struct {
-	count    int
+	count int
+	// windowStart is when the current counting window opened. It is fixed for
+	// the life of the window and is what allow() compares against.
+	windowStart time.Time
+	// lastSeen is only used by cleanup() to evict idle entries, so it may be
+	// refreshed on every request without affecting the limit.
 	lastSeen time.Time
 }
 
@@ -78,17 +83,28 @@ func (rl *rateLimiter) stop() {
 	close(rl.stopChan)
 }
 
+// allow reports whether a request from ip may proceed, using a fixed window
+// of rl.window that holds at most rl.limit requests.
+//
+// The previous implementation compared against lastSeen, which it also
+// refreshed on every request — so the window only ever expired after a full
+// period of complete silence. A client sending one request per second was
+// therefore allowed exactly `limit` requests and then blocked permanently,
+// because the window it was waiting on could never elapse. For a webhook
+// endpoint that means a moderately active repository gets locked out for good
+// and push-to-deploy silently stops working.
 func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	now := time.Now()
 	v, ok := rl.visitors[ip]
-	if !ok || time.Since(v.lastSeen) > rl.window {
-		rl.visitors[ip] = &visitor{count: 1, lastSeen: time.Now()}
+	if !ok || now.Sub(v.windowStart) > rl.window {
+		rl.visitors[ip] = &visitor{count: 1, windowStart: now, lastSeen: now}
 		return true
 	}
 	v.count++
-	v.lastSeen = time.Now()
+	v.lastSeen = now
 	return v.count <= rl.limit
 }
 
@@ -203,6 +219,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// authenticated records whether this request proved knowledge of the
+	// shared secret. It gates the deploy trigger below: without a configured
+	// secret every verification branch above is skipped, which used to mean
+	// ANY unauthenticated POST to this endpoint could make the server pull and
+	// run arbitrary code from the repository. Read-only outcomes (ignored
+	// events, unknown branches) stay unauthenticated so misconfiguration is
+	// still diagnosable.
+	authenticated := s.Secret != ""
 
 	// Parse event from provider-specific header
 	event := r.Header.Get("X-GitHub-Event")
@@ -224,6 +248,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if lowerEvent != "push" {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Event ignored (not push)")
+		return
+	}
+
+	// A push event is a request to execute code. Refuse it outright when no
+	// secret is configured rather than deploying on an unverified trigger.
+	if !authenticated {
+		log.Printf("Rejected unauthenticated push for %s: no webhook secret configured", appName)
+		http.Error(w, "Webhook secret not configured on this server; refusing to deploy", http.StatusUnauthorized)
 		return
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -48,17 +49,31 @@ func ListImages(ctx context.Context, appName string) ([]string, error) {
 	var images []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line != "" {
+		if line != "" && line != "<none>:<none>" {
 			images = append(images, line)
 		}
 	}
+	// Newest first. BuildImage tags every image "<app>:<YYYYMMDD-HHMMSS>", a
+	// format whose lexical order matches its chronological order, so a reverse
+	// string sort is a reliable recency ordering. CleanupOldImages depends on
+	// this: it used to trust `docker images` output order, which is only
+	// coincidentally recency-sorted and is not part of the CLI's contract —
+	// meaning a prune could delete the image the app is currently running.
+	sort.Sort(sort.Reverse(sort.StringSlice(images)))
 	return images, nil
 }
 
+// CleanupOldImages removes all but the `keep` most recent images built for an
+// app. Failure to remove an individual image is reported but not fatal:
+// `docker rmi` refuses images that are still in use by a container, which is
+// exactly what we want for the running deployment.
 func CleanupOldImages(ctx context.Context, appName string, keep int) error {
 	images, err := ListImages(ctx, appName)
 	if err != nil {
 		return err
+	}
+	if keep < 0 {
+		keep = 0
 	}
 	if len(images) <= keep {
 		return nil

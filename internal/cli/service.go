@@ -61,13 +61,25 @@ func RunWebhook(args []string) error {
 		return err
 	}
 
+	// Fail fast rather than starting a listener that will reject every push.
+	// The server refuses unauthenticated deploys per-request as well, but an
+	// operator is far more likely to notice this at startup than to discover
+	// it from a 401 in their provider's webhook delivery log.
+	if cfg.WebhookSecret == "" {
+		return fmt.Errorf("no webhook secret configured; re-run 'simpledeploy init' to set one")
+	}
+
 	port := cfg.WebhookPort
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--port" && i+1 < len(args) {
 			p, err := strconv.Atoi(args[i+1])
-			if err == nil {
-				port = p
+			if err != nil {
+				return fmt.Errorf("invalid --port value %q: %w", args[i+1], err)
 			}
+			if p < 1 || p > 65535 {
+				return fmt.Errorf("invalid --port value %d (must be 1-65535)", p)
+			}
+			port = p
 		}
 	}
 

@@ -54,6 +54,8 @@ var (
 	proxyAddCaddyApp       = proxy.AddCaddyApp
 	proxyReloadCaddy       = proxy.ReloadCaddy
 	proxyRemoveCaddyApp    = proxy.RemoveCaddyApp
+	proxySetupWebhookRoute = proxy.SetupWebhookRoute
+	proxyRestartTraefik    = proxy.RestartTraefik
 	stateGetConfig         = state.GetConfig
 	stateSaveConfig        = state.SaveConfig
 	stateGetApp            = state.GetApp

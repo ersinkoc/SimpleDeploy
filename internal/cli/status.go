@@ -50,7 +50,8 @@ func RunStatus() error {
 	}
 
 	fmt.Printf("  Applications (%d):\n", len(s.Apps))
-	for name, app := range s.Apps {
+	for _, name := range sortedAppNames(s.Apps) {
+		app := s.Apps[name]
 		containerName := docker.ContainerName(name)
 		status, err := docker.ContainerStatus(context.Background(), containerName)
 		if err != nil {
