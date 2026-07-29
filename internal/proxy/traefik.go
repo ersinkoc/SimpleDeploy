@@ -38,6 +38,15 @@ func SetupTraefik(ctx context.Context, acmeEmail string) error {
 		return fmt.Errorf("failed to create proxy directory: %w", err)
 	}
 
+	// Create the file-provider directory BEFORE `docker compose up`. The
+	// generated compose bind-mounts ./dynamic, and Docker creates a missing
+	// bind source itself — as root. SetupWebhookRoute would then be unable to
+	// write into it when SimpleDeploy runs as a non-root user, silently
+	// disabling push-to-deploy.
+	if err := osMkdirAll(dynamicDir(), 0755); err != nil {
+		return fmt.Errorf("failed to create traefik dynamic directory: %w", err)
+	}
+
 	composeContent := generateTraefikCompose(acmeEmail)
 	composePath := filepath.Join(getProxyDir(), "docker-compose.yml")
 

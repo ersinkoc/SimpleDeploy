@@ -81,6 +81,15 @@ func generateServiceCompose(baseDomain string, webhookPort int) string {
 	// produced a container that immediately exited.
 	stateDir := config.HomeDataDir()
 
+	// The Traefik rule is built separately because it needs backticks, and the
+	// compose template below is a RAW string literal where `\x60` is not an
+	// escape sequence — it is four literal characters. The previous version
+	// interpolated `\x60` directly into the template and emitted
+	// Host(\x60domain\x60), which Traefik cannot parse, so the service route
+	// never worked. Built here with an interpreted string instead.
+	const bt = "`"
+	traefikRule := fmt.Sprintf("Host(%s%s%s) && PathPrefix(%s/_qd%s)", bt, baseDomain, bt, bt, bt)
+
 	// /etc/machine-id is mounted read-only because state encryption derives its
 	// key from the machine ID. A container gets its own, so without this mount
 	// every git token and database password written by the host CLI fails to
@@ -117,7 +126,7 @@ services:
       - simpledeploy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.qd-api.rule=Host(\x60%s\x60) && PathPrefix(\x60/_qd\x60)"
+      - "traefik.http.routers.qd-api.rule=%s"
       - "traefik.http.routers.qd-api.entrypoints=websecure"
       - "traefik.http.routers.qd-api.tls.certresolver=letsencrypt"
       - "traefik.http.services.qd-api.loadbalancer.server.port=%d"
@@ -128,6 +137,6 @@ services:
 		config.BaseDir, config.BaseDir,
 		stateDir, stateDir,
 		webhookPort, webhookPort,
-		baseDomain,
+		traefikRule,
 		webhookPort)
 }

@@ -19,7 +19,15 @@ import (
 // arriving across it — the client must be allowed again once the window rolls
 // over, not blocked indefinitely.
 func TestRateLimiter_WindowIsNotExtendedByTraffic(t *testing.T) {
-	rl := newRateLimiter(2, 80*time.Millisecond)
+	// The window is deliberately generous relative to the polling interval
+	// below. A tight window makes the test sensitive to scheduler jitter on a
+	// loaded CI runner (especially under -race), and a rate limiter that fails
+	// intermittently in CI is worse than no test at all. Total runtime is
+	// bounded at roughly window + probeBudget.
+	const window = 200 * time.Millisecond
+	const probeEvery = 25 * time.Millisecond
+
+	rl := newRateLimiter(2, window)
 	defer rl.stop()
 
 	const ip = "203.0.113.9"
@@ -31,25 +39,27 @@ func TestRateLimiter_WindowIsNotExtendedByTraffic(t *testing.T) {
 		t.Fatal("third request within the window should be limited")
 	}
 
-	// Keep sending during the window so lastSeen is continuously refreshed.
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		rl.allow(ip)
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// The window has now rolled over at least once. A correct fixed-window
-	// limiter lets the client back in; the buggy one never would.
+	// Send continuously for longer than one full window. Every call refreshes
+	// lastSeen, which is exactly what the old implementation compared against —
+	// so under the bug the window can never elapse and the client stays blocked
+	// for as long as it keeps talking.
+	//
+	// The probe runs for 3x the window so at least two rollovers are crossed
+	// regardless of how the sleeps land, and it records whether the limiter
+	// ever let the client back in.
 	allowedAgain := false
-	for i := 0; i < 5; i++ {
+	deadline := time.Now().Add(3 * window)
+	for time.Now().Before(deadline) {
 		if rl.allow(ip) {
 			allowedAgain = true
 			break
 		}
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(probeEvery)
 	}
+
 	if !allowedAgain {
-		t.Error("client with steady traffic was locked out permanently")
+		t.Errorf("a client sending steady traffic was never allowed again after %v "+
+			"(window %v) — the counting window is being extended by traffic", 3*window, window)
 	}
 }
 
