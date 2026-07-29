@@ -565,9 +565,7 @@ func TestIsInstalled(t *testing.T) {
 }
 
 func TestGetVersion(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	ver, err := GetVersion(context.Background())
 	if err != nil {
 		t.Fatalf("GetVersion failed: %v", err)
@@ -581,9 +579,7 @@ func TestGetVersion(t *testing.T) {
 }
 
 func TestIsComposeInstalled(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	// IsComposeInstalled returning false on a host without the compose
 	// plugin is a host-environment property, not a code defect — skip
 	// rather than fail so CI / dev machines without compose still run
@@ -594,9 +590,7 @@ func TestIsComposeInstalled(t *testing.T) {
 }
 
 func TestContainerStatus_NotFound(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	status, err := ContainerStatus(context.Background(), "nonexistent-container-xyz-123")
 	if err != nil {
 		t.Fatalf("ContainerStatus should not error for missing container: %v", err)
@@ -607,18 +601,14 @@ func TestContainerStatus_NotFound(t *testing.T) {
 }
 
 func TestContainerExists_NotFound(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	if ContainerExists(context.Background(), "nonexistent-container-xyz-123") {
 		t.Error("Nonexistent container should not exist")
 	}
 }
 
 func TestListImages_Empty(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	// Use a name that won't match any real images
 	images, err := ListImages(context.Background(), "nonexistent-app-xyz-999")
 	if err != nil {
@@ -630,9 +620,7 @@ func TestListImages_Empty(t *testing.T) {
 }
 
 func TestCleanupOldImages_NoImages(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	// Should not error when there are no images to clean
 	err := CleanupOldImages(context.Background(), "nonexistent-app-xyz-999", 3)
 	if err != nil {
@@ -641,9 +629,7 @@ func TestCleanupOldImages_NoImages(t *testing.T) {
 }
 
 func TestRunOutput_InvalidCommand(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	output, err := RunOutput(context.Background(), []string{"nonexistent-subcommand-xyz"})
 	if err == nil {
 		t.Error("Should error for invalid docker command")
@@ -652,18 +638,14 @@ func TestRunOutput_InvalidCommand(t *testing.T) {
 }
 
 func TestNetworkExists_NonExistent(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	if NetworkExists(context.Background(), "nonexistent-network-xyz-999") {
 		t.Error("Nonexistent network should not exist")
 	}
 }
 
 func TestCreateAndRemoveNetwork(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	testNet := "test-simpledeploy-unit-test"
 
 	// Clean up from any previous failed test
@@ -688,9 +670,7 @@ func TestCreateAndRemoveNetwork(t *testing.T) {
 }
 
 func TestRun_InvalidArgs(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	err := Run([]string{"nonexistent-command-xyz"})
 	if err == nil {
 		t.Error("Should error for invalid docker command")
@@ -698,9 +678,7 @@ func TestRun_InvalidArgs(t *testing.T) {
 }
 
 func TestRunOutput_Version(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	output, err := RunOutput(context.Background(), []string{"--version"})
 	if err != nil {
 		t.Fatalf("docker --version failed: %v", err)
@@ -711,9 +689,7 @@ func TestRunOutput_Version(t *testing.T) {
 }
 
 func TestRun_Version(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	err := Run([]string{"--version"})
 	if err != nil {
 		t.Errorf("docker --version should succeed: %v", err)
@@ -721,9 +697,7 @@ func TestRun_Version(t *testing.T) {
 }
 
 func TestContainerStatus_RunningContainer(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	// Run a quick container and check status
 	name := "qd-test-status-check"
 
@@ -754,9 +728,7 @@ func TestContainerStatus_RunningContainer(t *testing.T) {
 }
 
 func TestStopContainer(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	name := "qd-test-stop-check"
 
 	// Clean up
@@ -778,9 +750,7 @@ func TestStopContainer(t *testing.T) {
 }
 
 func TestRestartContainer(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	name := "qd-test-restart-check"
 
 	// Clean up
@@ -801,9 +771,7 @@ func TestRestartContainer(t *testing.T) {
 }
 
 func TestListContainers(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	containers, err := ListContainers(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListContainers failed: %v", err)
@@ -813,9 +781,7 @@ func TestListContainers(t *testing.T) {
 }
 
 func TestExecContainer(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	name := "qd-test-exec-check"
 
 	// Clean up
@@ -836,9 +802,7 @@ func TestExecContainer(t *testing.T) {
 }
 
 func TestBuildImage_SimpleDockerfile(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	dockerfile := "FROM hello-world:latest\n"
@@ -859,9 +823,7 @@ func TestBuildImage_SimpleDockerfile(t *testing.T) {
 }
 
 func TestComposeUpAndDown(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose\n"
@@ -879,9 +841,7 @@ func TestComposeUpAndDown(t *testing.T) {
 }
 
 func TestComposeRemove_NoVolumes(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose-rm\n"
@@ -895,9 +855,7 @@ func TestComposeRemove_NoVolumes(t *testing.T) {
 }
 
 func TestComposeRemove_WithVolumes(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose-vol\n"
@@ -911,9 +869,7 @@ func TestComposeRemove_WithVolumes(t *testing.T) {
 }
 
 func TestComposeLogs(t *testing.T) {
-	if !IsInstalled() || !IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	composeContent := "services:\n  test-hello:\n    image: hello-world:latest\n    container_name: qd-test-compose-logs\n"
@@ -936,9 +892,7 @@ func TestComposeLogs(t *testing.T) {
 }
 
 func TestEnsureDocker_AlreadyInstalled(t *testing.T) {
-	if !IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	old := os.Stdout
 	devNull, _ := os.Open(os.DevNull)

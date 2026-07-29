@@ -100,6 +100,12 @@ func Decrypt(encoded string) (string, error) {
 }
 
 func GenerateSecret(prefix string, length int) (string, error) {
+	// Guard the arithmetic below: a non-positive length would reach
+	// make([]byte, negative) and panic, and a zero-length secret is never
+	// something a caller legitimately wants.
+	if length <= 0 {
+		return "", fmt.Errorf("secret length must be positive, got %d", length)
+	}
 	byteLen := (length + 1) / 2
 	b := make([]byte, byteLen)
 	if _, err := randRead(b); err != nil {
@@ -110,21 +116,38 @@ func GenerateSecret(prefix string, length int) (string, error) {
 
 func GeneratePassword(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+	if length <= 0 {
+		return "", fmt.Errorf("password length must be positive, got %d", length)
+	}
+
+	n := len(charset)
+	// Rejection sampling. Only byte values below the largest multiple of n that
+	// fits in a byte (248 for this 62-character set) are used; taking b%n over
+	// the full 0-255 range would make the first 256%n characters measurably
+	// more likely than the rest.
+	//
+	// The threshold is compared as an int rather than converted to a byte. The
+	// previous `byte(256 - 256%len(charset))` was correct for this specific
+	// charset but is a narrowing conversion whose safety depends on a value the
+	// compiler cannot check — it silently wraps for any charset of length 1,
+	// and static analysis flags it as a potential integer overflow.
+	limit := 256 - (256 % n)
+
 	result := make([]byte, length)
-	max := byte(256 - 256%len(charset)) // rejection sampling to avoid modulo bias
-	i := 0
-	for i < length {
+	for i := 0; i < length; {
 		batch := make([]byte, length*2)
 		if _, err := randRead(batch); err != nil {
 			return "", fmt.Errorf("failed to generate password: %w", err)
 		}
 		for _, b := range batch {
-			if b < max {
-				result[i] = charset[int(b)%len(charset)]
-				i++
-				if i >= length {
-					break
-				}
+			if int(b) >= limit {
+				continue // biased tail of the byte range — discard and retry
+			}
+			result[i] = charset[int(b)%n]
+			i++
+			if i >= length {
+				break
 			}
 		}
 	}

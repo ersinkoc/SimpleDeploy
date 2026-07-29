@@ -1,4 +1,4 @@
-.PHONY: build test test-coverage race clean release docker docker-build docker-push lint verify fmt
+.PHONY: build test test-integration test-coverage race clean release docker docker-build docker-push lint verify fmt
 
 BINARY := simpledeploy
 VERSION := 0.1.0
@@ -11,8 +11,13 @@ REGISTRY := ghcr.io/ersinkoc
 build:
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
+# Unit tests. Integration tests (real Docker, ports 80/443) are opt-in — see
+# test-integration — because an unprivileged CI runner cannot run them.
 test:
 	go test -p=1 -count=1 ./...
+
+test-integration:
+	SIMPLEDEPLOY_INTEGRATION=1 go test -p=1 -count=1 ./...
 
 test-coverage:
 	go test -p=1 -count=1 -coverprofile=coverage.out ./...

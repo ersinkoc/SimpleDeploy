@@ -9,6 +9,8 @@
 # Test
 *.out
 *.test
+.test-output.log
+.commit-msg.tmp
 
 # Go
 go.work

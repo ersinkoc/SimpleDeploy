@@ -1,0 +1,32 @@
+name: Integration Tests
+
+# Not run on push. These tests drive a real Docker daemon, pull images from a
+# registry, and in the proxy package need exclusive use of ports 80/443 — which
+# an unprivileged runner cannot even bind. Run them deliberately, from the
+# Actions tab or on a schedule, so the push pipeline stays a signal rather than
+# permanent noise.
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 04:17 UTC.
+    - cron: '17 4 * * 1'
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Docker info
+        run: docker version && docker compose version
+
+      - name: Run integration tests
+        env:
+          SIMPLEDEPLOY_INTEGRATION: '1'
+        run: go test -p=1 -count=1 -v ./...
+        timeout-minutes: 30

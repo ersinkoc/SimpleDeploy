@@ -1037,9 +1037,7 @@ func TestRunRedeploy_NoConfig(t *testing.T) {
 }
 
 func TestRunRedeploy_ComposeReadFails(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1076,9 +1074,7 @@ func TestRunRedeploy_ComposeReadFails(t *testing.T) {
 }
 
 func TestRunRedeploy_WithDockerfile(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1128,9 +1124,7 @@ CMD ["cat", "/app/hello.txt"]
 }
 
 func TestRunRedeploy_WithCompose(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1198,9 +1192,7 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 }
 
 func TestRunLogs_AppFound(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1324,9 +1316,7 @@ func TestRunRemove_NoConfig(t *testing.T) {
 }
 
 func TestRunServiceStartStop_NoDocker(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1457,9 +1447,7 @@ func setWizardInput(t *testing.T, input string) {
 }
 
 func TestRunInit_WithDocker(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1532,9 +1520,7 @@ func TestRunInit_WithDocker(t *testing.T) {
 }
 
 func TestRunInit_CaddyChoice(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1593,9 +1579,7 @@ func TestRunInit_CaddyChoice(t *testing.T) {
 }
 
 func TestRunInit_ReconfigureNo(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1627,9 +1611,7 @@ func TestRunInit_ReconfigureNo(t *testing.T) {
 }
 
 func TestRunInit_AlreadyInitReconfigure(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1682,9 +1664,7 @@ func TestRunInit_AlreadyInitReconfigure(t *testing.T) {
 }
 
 func TestEnsureDocker_Installed(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	_ = captureStdout(func() {
 		err := docker.EnsureDocker(context.Background())
@@ -1695,9 +1675,7 @@ func TestEnsureDocker_Installed(t *testing.T) {
 }
 
 func TestRunInit_InvalidPort(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)
@@ -1813,9 +1791,7 @@ func TestRunDeploy_CloneFails(t *testing.T) {
 }
 
 func TestRunDeploy_CancelDeploy(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := t.TempDir()
 	state.InitState(dir)

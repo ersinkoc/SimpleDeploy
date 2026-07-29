@@ -225,9 +225,7 @@ func TestGenerateTraefikCompose(t *testing.T) {
 }
 
 func TestSetupCaddy_WithDocker(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	// Check if ports 80/443 are available
 	if err := checkPortAvailable(80); err != nil {
@@ -277,9 +275,7 @@ func TestSetupCaddy_WithDocker(t *testing.T) {
 }
 
 func TestSetupTraefik_WithDocker(t *testing.T) {
-	if !docker.IsInstalled() || !docker.IsComposeInstalled(context.Background()) {
-		t.Skip("Docker/Compose not installed")
-	}
+	requireCompose(t)
 
 	if err := checkPortAvailable(80); err != nil {
 		t.Skipf("Port 80 not available: %v", err)
@@ -327,9 +323,7 @@ func TestSetupTraefik_WithDocker(t *testing.T) {
 }
 
 func TestReloadCaddy_NoContainer(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	// Ensure no stale qd-caddy container from previous tests
 	_ = docker.Run([]string{"rm", "-f", "qd-caddy"})
 	err := ReloadCaddy()
@@ -339,9 +333,7 @@ func TestReloadCaddy_NoContainer(t *testing.T) {
 }
 
 func TestStopCaddy_NoCompose(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	setupTestProxyDir(t)
 	err := StopCaddy()
 	if err == nil {
@@ -350,9 +342,7 @@ func TestStopCaddy_NoCompose(t *testing.T) {
 }
 
 func TestStopTraefik_NoCompose(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	setupTestProxyDir(t)
 	err := StopTraefik()
 	if err == nil {
@@ -361,9 +351,7 @@ func TestStopTraefik_NoCompose(t *testing.T) {
 }
 
 func TestRestartTraefik_NoCompose(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 	setupTestProxyDir(t)
 	err := RestartTraefik()
 	if err == nil {
@@ -452,9 +440,7 @@ func TestRemoveCaddyApp_OnlyRemovesTarget(t *testing.T) {
 // TestSetupCaddy_WritesFiles tests that SetupCaddy creates the expected files
 // (compose + Caddyfile) without needing port 80/443 (it'll fail at docker compose up).
 func TestSetupCaddy_WritesFiles(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := setupTestProxyDir(t)
 
@@ -495,9 +481,7 @@ func TestSetupCaddy_WritesFiles(t *testing.T) {
 
 // TestSetupTraefik_WritesFiles tests that SetupTraefik creates the expected files.
 func TestSetupTraefik_WritesFiles(t *testing.T) {
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	dir := setupTestProxyDir(t)
 
@@ -542,9 +526,7 @@ func TestSetupCaddy_ReadOnlyDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permissions not supported on Windows")
 	}
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	tmpDir := t.TempDir()
 	readOnlyDir := filepath.Join(tmpDir, "readonly")
@@ -565,9 +547,7 @@ func TestSetupTraefik_ReadOnlyDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permissions not supported on Windows")
 	}
-	if !docker.IsInstalled() {
-		t.Skip("Docker not installed")
-	}
+	requireDocker(t)
 
 	tmpDir := t.TempDir()
 	readOnlyDir := filepath.Join(tmpDir, "readonly")

@@ -217,10 +217,22 @@ Generated Dockerfiles are conservative starting points: they install dependencie
 git clone https://github.com/ersinkoc/SimpleDeploy.git
 cd SimpleDeploy
 make build          # or: CGO_ENABLED=0 go build -o simpledeploy .
-make test           # go test -p=1 -count=1 ./...
+make test           # unit tests
 make lint           # go vet ./...
 make release        # cross-compile all platforms into dist/
 ```
+
+### Integration tests
+
+Tests that drive a real Docker daemon — building images, starting containers,
+and (for the proxy) binding ports 80/443 — are opt-in, because they cannot run
+on an unprivileged CI runner. `make test` skips them. To run everything:
+
+```bash
+make test-integration   # SIMPLEDEPLOY_INTEGRATION=1 go test -p=1 -count=1 ./...
+```
+
+They also run weekly and on demand via the **Integration Tests** workflow.
 
 Version is stamped at link time from the Makefile, so `simpledeploy version` always matches the build.
 

@@ -24,6 +24,11 @@ jobs:
         uses: securego/gosec@v2.22.0
         with:
           # G204 (subprocess with variables) and G304 (file path traversal) are
-          # expected false positives for a deployment tool that necessarily
-          # executes docker/git commands and constructs filesystem paths.
+          # expected for a deployment tool that necessarily executes docker/git
+          # commands and constructs filesystem paths from user input that is
+          # validated in internal/state/validate.go.
+          #
+          # Everything else is in scope. G115 (integer overflow conversion) in
+          # particular is left enabled — it is what caught the narrowing
+          # conversion in GeneratePassword's rejection-sampling threshold.
           args: '-severity high -confidence medium -exclude=G204,G304 ./...'

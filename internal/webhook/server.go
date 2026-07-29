@@ -140,10 +140,17 @@ func (s *Server) Start() error {
 	log.Printf("Webhook server listening on %s", addr)
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Addr:    addr,
+		Handler: mux,
+		// ReadHeaderTimeout is the one that actually bounds a slowloris attack:
+		// without it a client can hold a connection open indefinitely by
+		// dribbling out header bytes, because ReadTimeout only starts counting
+		// once the request line has been read. This listener is reachable from
+		// the internet, so the cost of omitting it is real.
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	// Graceful shutdown on signal

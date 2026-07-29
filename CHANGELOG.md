@@ -72,6 +72,37 @@ fixed here — several of them meant a headline feature did not work at all.
 - `logs` defaults to a bounded one-shot dump; follow is opt-in via `-f`.
 - Old image pruning sorts by tag so it can no longer delete the running image.
 
+### Static analysis
+
+- **Fixed the gosec finding that had kept the Security Scan workflow red since
+  it was added.** `GeneratePassword` computed its rejection-sampling threshold
+  as `byte(256 - 256%len(charset))` — a narrowing conversion that happens to be
+  correct for the current 62-character set but silently wraps for any charset
+  of length 1, and which the compiler cannot check. The threshold is now
+  compared as an `int`.
+- `GenerateSecret` and `GeneratePassword` reject non-positive lengths instead of
+  panicking in `make([]byte, negative)`.
+- The webhook server now sets `ReadHeaderTimeout` (and `IdleTimeout`). Without
+  it, `ReadTimeout` alone does not bound a slowloris attack, because its clock
+  only starts once the request line has been read — and this listener is
+  reachable from the internet.
+
+### Testing
+
+- **Split integration tests from the unit suite.** Roughly forty tests drive a
+  real Docker daemon — pulling images, building, starting containers — and the
+  proxy ones additionally need exclusive use of ports 80/443, which an
+  unprivileged runner cannot bind at all. They were gated only on "is Docker
+  installed", so on a CI runner they all ran, and `go test ./...` had never
+  passed there: the very first CI run, months before this release, already
+  failed at the Test step while vet and build passed. The reported "13/13
+  packages passing" reflected local Windows runs, where every one of these
+  tests silently skipped.
+
+  They are now opt-in via `SIMPLEDEPLOY_INTEGRATION=1` and run from a separate
+  "Integration Tests" workflow (manual dispatch plus weekly). The push pipeline
+  runs the unit suite, which is the part that can actually be green.
+
 ### Release engineering
 
 - The release workflow now runs `go vet`, the test suite, and the race detector
