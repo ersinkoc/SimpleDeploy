@@ -70,18 +70,15 @@ func Detect(repoDir string) *AppType {
 	return &AppType{Name: TypeStatic, Detected: false, Port: 80}
 }
 
+// detectNodePort reports the default port for a Node.js project. Every
+// framework worth distinguishing (Next, Nuxt, Express-style servers) defaults
+// to 3000, so today this is a constant — the previous version read
+// package.json and branched on "next"/"nuxt" only to return 3000 from every
+// branch anyway. The function (and its repoDir parameter) is kept as the seam
+// where real package.json-based detection would go if a framework with a
+// different default is ever supported.
 func detectNodePort(repoDir string) int {
-	data, err := os.ReadFile(filepath.Join(repoDir, "package.json"))
-	if err != nil {
-		return 3000
-	}
-	content := strings.ToLower(string(data))
-	if strings.Contains(content, `"next"`) {
-		return 3000
-	}
-	if strings.Contains(content, `"nuxt"`) {
-		return 3000
-	}
+	_ = repoDir
 	return 3000
 }
 

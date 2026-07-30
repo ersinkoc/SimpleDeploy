@@ -1033,7 +1033,11 @@ func TestRunDeploy_EncryptError(t *testing.T) {
 	}
 }
 
-func TestRunDeploy_DecryptError(t *testing.T) {
+// TestRunDeploy_ClonesWithPlaintextToken verifies the wizard hands the token
+// the operator just typed straight to git clone. It must NOT round-trip
+// through Decrypt: a broken Decrypt (mocked to fail here) is irrelevant to
+// the clone, and only the encrypted form may reach state.
+func TestRunDeploy_ClonesWithPlaintextToken(t *testing.T) {
 	repoDir, _ := setupDeployTest(t, map[string]string{"Dockerfile": "FROM alpine\n"})
 	initGitRepo(t, repoDir)
 	oldEnc := stateEncrypt
@@ -1042,6 +1046,16 @@ func TestRunDeploy_DecryptError(t *testing.T) {
 	oldDec := stateDecrypt
 	stateDecrypt = func(data string) (string, error) { return "", errors.New("fail") }
 	defer func() { stateDecrypt = oldDec }()
+
+	// Wrap the clone mock initGitRepo installed to capture the token it gets.
+	var cloneToken string
+	innerClone := gitClone
+	gitClone = func(ctx context.Context, repo, branch, dest, token string) error {
+		cloneToken = token
+		return innerClone(ctx, repo, branch, dest, token)
+	}
+	defer func() { gitClone = innerClone }()
+
 	input := "https://github.com/test/repo.git\n\ny\ntok\ndecerr\n7\n3000\n\nn\n6\ndecerr\n\nn\nn\n"
 	setWizardInput(t, input)
 	_ = captureStdout(func() {
@@ -1049,6 +1063,9 @@ func TestRunDeploy_DecryptError(t *testing.T) {
 			t.Fatalf("Expected no error: %v", err)
 		}
 	})
+	if cloneToken != "tok" {
+		t.Errorf("gitClone received token %q, want the plaintext %q", cloneToken, "tok")
+	}
 }
 
 func TestRunDeploy_WriteEnvCustomPathError(t *testing.T) {

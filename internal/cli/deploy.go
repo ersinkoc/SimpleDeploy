@@ -41,9 +41,15 @@ func RunDeploy() error {
 	}
 
 	private := wizard.Confirm("Private repository?", false)
+	// The token the operator just typed, kept for this run's git clone. Only
+	// the encrypted form is ever stored on app.GitToken — the previous code
+	// round-tripped through Decrypt to get this value back, which added a
+	// failure path (decrypt error → warn, then hand the CIPHERTEXT to git as
+	// the token) for no benefit.
+	var plainToken string
 	if private {
-		app.GitToken = wizard.AskRequired("GitHub/GitLab Token")
-		encToken, err := stateEncrypt(app.GitToken)
+		plainToken = wizard.AskRequired("GitHub/GitLab Token")
+		encToken, err := stateEncrypt(plainToken)
 		if err != nil {
 			// Fail-closed: do not fall back to plaintext storage. The only
 			// realistic failure for state.Encrypt is rand.Reader being
@@ -96,17 +102,7 @@ func RunDeploy() error {
 	}()
 
 	wizard.Info("Cloning repository...")
-	gitToken := app.GitToken
-	if private {
-		decrypted, err := stateDecrypt(gitToken)
-		if err == nil {
-			gitToken = decrypted
-		} else {
-			wizard.Warn("Failed to decrypt git token: " + err.Error())
-		}
-	}
-
-	if err := gitClone(context.Background(), app.Repo, app.Branch, sourceDir, gitToken); err != nil {
+	if err := gitClone(context.Background(), app.Repo, app.Branch, sourceDir, plainToken); err != nil {
 		return fmt.Errorf("git clone failed: %w", err)
 	}
 	wizard.Success("Repository cloned")

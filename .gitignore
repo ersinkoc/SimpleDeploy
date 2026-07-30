@@ -9,6 +9,7 @@
 # Test
 *.out
 *.test
+*.log
 .test-output.log
 .commit-msg.tmp
 
