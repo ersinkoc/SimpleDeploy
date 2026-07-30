@@ -10,6 +10,18 @@ flow logic, webhook protocol correctness against provider documentation) — the
 a third pass reviewing the fixes themselves, which found and corrected several
 regressions they had introduced.
 
+### Test coverage for the gaps that produced these bugs
+
+Three gaps CLAUDE.md named as the source of shipped bugs now have opt-in
+integration tests (`SIMPLEDEPLOY_INTEGRATION=1`), each covering something a unit
+test provably cannot: what a container's environment actually **receives** (the
+only way to verify the `$`-escaping contract, since Compose interpolates after
+the YAML parse), crash-loop detection against **real** Docker restart timing
+(a stub cannot produce the restarting/running flicker that made a single status
+read report a crash-looping deploy as a success), and the single-file
+**bind-mount** contract (writeCaddyfile and an atomic writer produce
+byte-identical files — only a real mount tells them apart).
+
 ### Regressions found by reviewing the fixes (all fixed here)
 
 - **Ctrl-C at a wizard prompt locked an app out for 90 minutes.** The new

@@ -305,14 +305,39 @@ the real generators perform).
 
 Several of the above were invisible to the unit suite and only surfaced in a
 real end-to-end run (`init` → `deploy` → `redeploy` → webhook → rollback against
-a live Docker daemon). When touching these areas, prefer an integration check:
+a live Docker daemon). When touching these areas, prefer an integration check.
+
+Three gaps that produced shipped bugs are now covered by opt-in integration
+tests (`SIMPLEDEPLOY_INTEGRATION=1`). Keep them working — each replaced an
+assertion that could not have caught its bug:
+
+- **What a container's environment actually RECEIVES**
+  (`internal/compose/env_integration_test.go`). Previously only the emitted YAML
+  text was asserted, which is why the list-form `environment:` bug shipped. It
+  is also the only way to verify the `$`-escaping contract at all, since
+  Compose's interpolation happens after the YAML parse and is invisible to a
+  text assertion. Note `docker compose config` KEEPS `$$` doubled for
+  round-trip fidelity — it is not a view of what the process will see, so read
+  the values out of a running container.
+- **Crash-loop detection against real Docker timing**
+  (`internal/cli/crashloop_integration_test.go`). A stub cannot reproduce what
+  `restart: unless-stopped` does — the container flickers between "restarting"
+  and "running" and never settles in "exited"/"dead" — which is exactly why a
+  single status read reported a crash-looping deploy as a success.
+- **The single-file bind-mount contract**
+  (`internal/proxy/mount_integration_test.go`). No unit test can distinguish
+  writeCaddyfile from an atomic writer: they produce byte-identical files, and
+  only a real mount tells them apart. Caveat observed while writing it: on
+  Docker Desktop for Windows the rename DOES propagate through the mount, so the
+  orphaning test skips itself there with an explanation. The constraint is real
+  on native Linux Docker, which is what SimpleDeploy targets.
+
+Still uncovered:
 
 - Tests point `InitState` at a `t.TempDir()` that **already exists**, so no test
   ever exercised the fresh-install path.
-- Nothing in the unit suite mounts a file into a container, so the inode/bind
-  mount contract was unrepresented.
-- Nothing asserted on what a container's environment actually **receives** —
-  only on the YAML text SimpleDeploy emits.
+- No test drives the full `init` → `deploy` → push → rollback chain end to end;
+  the pieces are covered individually.
 
 ### Environment Variables
 
