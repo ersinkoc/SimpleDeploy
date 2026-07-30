@@ -34,6 +34,29 @@ opt-in (`SIMPLEDEPLOY_INTEGRATION=1`):
   again, `CurrentImage` still names the last working image, and the rolled-back
   attempt does not count as a deploy.
 
+### Found by running the suite the way CI runs it
+
+Two defects survived a green local run and would have hit CI:
+
+- **The per-app lock required root.** Lock files were placed under
+  `/opt/simpledeploy/apps`, which only root can create, and the lock was taken
+  before anything else — so for a non-root operator every `stop`/`restart`/
+  `remove`/`redeploy` of an unknown app reported "mkdir /opt/simpledeploy:
+  permission denied" instead of "app not found". Locks now live in the state
+  directory (already a hard dependency of every command, and mounted into the
+  service container at the same path), and existence is checked before the lock
+  is taken. Invisible on Windows, where that path resolves somewhere writable.
+- **A leaked test goroutine raced the package-level test doubles.** One test
+  started a CLI command with `go Route(...)` and never joined it; the goroutine
+  outlived the test and ran while other tests swapped the injectable vars. The
+  race detector caught it on Linux only — the race workflow could have gone red
+  at any time. The goroutine was never needed (an invalid `--port` is rejected
+  during argument parsing), so the call is now synchronous and its error
+  asserted.
+
+Also: two unit tests failed outright when the `docker` binary was absent, which
+made `go test ./...` red for anyone without Docker; they now skip instead.
+
 ### Regressions found by reviewing the fixes (all fixed here)
 
 - **Ctrl-C at a wizard prompt locked an app out for 90 minutes.** The new

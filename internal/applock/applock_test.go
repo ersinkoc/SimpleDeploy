@@ -12,22 +12,21 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/config"
 )
 
-// lockTestDir points BaseDir at a temp directory so the lock files these tests
-// create never touch a real install.
+// lockTestDir points the STATE directory — where lock files live — at a temp
+// directory, so the locks these tests create never touch a real install.
 func lockTestDir(t *testing.T) string {
 	t.Helper()
-	old := config.BaseDir
+	dir := filepath.Join(t.TempDir(), "state")
+	t.Setenv(config.StateDirEnv, dir)
 	t.Cleanup(func() {
-		config.BaseDir = old
 		// Locks are tracked process-wide; do not leak them into other tests.
 		ReleaseAll()
 	})
-	config.BaseDir = filepath.Join(t.TempDir(), "opt", "simpledeploy")
-	return config.BaseDir
+	return dir
 }
 
 func lockPathFor(appName string) string {
-	return filepath.Join(config.AppsDir(), "."+appName+lockSuffix)
+	return filepath.Join(config.HomeDataDir(), "."+appName+lockSuffix)
 }
 
 func TestAcquire_ExclusiveThenReusable(t *testing.T) {
@@ -108,7 +107,7 @@ func TestAcquire_ErrorMessageDoesNotInviteDeletingALiveLock(t *testing.T) {
 func TestAcquire_StealsStaleLock(t *testing.T) {
 	lockTestDir(t)
 
-	if err := os.MkdirAll(config.AppsDir(), 0755); err != nil {
+	if err := os.MkdirAll(config.HomeDataDir(), 0700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	lockPath := lockPathFor("crashed")

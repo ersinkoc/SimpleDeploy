@@ -14,6 +14,12 @@ func RunRemove(args []string) error {
 		return err
 	}
 
+	// Existence first, lock second — see stop.go.
+	app, err := stateGetApp(appName)
+	if err != nil {
+		return err
+	}
+
 	// Take the same lock a deploy holds: tearing containers down and deleting
 	// the app directory while a deploy of that app is mid-build leaves the
 	// deploy writing into a directory that is being removed under it.
@@ -22,11 +28,6 @@ func RunRemove(args []string) error {
 		return err
 	}
 	defer releaseLock()
-
-	app, err := stateGetApp(appName)
-	if err != nil {
-		return err
-	}
 
 	cfg, err := stateGetConfig()
 	if err != nil {

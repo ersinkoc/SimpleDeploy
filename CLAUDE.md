@@ -243,8 +243,21 @@ the real generators perform).
   just built. `stop`/`restart` need it too — without it a concurrent redeploy
   `compose up`s the container back up and then overwrites the status, so the
   operator's action vanishes with no error.
-  - The lock file lives in `AppsDir`, not the app directory: deploy's abort path
-    removes that directory wholesale.
+  - **Lock files live in the STATE directory, not `AppsDir`.** `AppsDir` is
+    `/opt/simpledeploy/apps`, which only root can create — so taking a lock
+    could fail with "mkdir /opt/simpledeploy: permission denied", and since the
+    lock came first that error *replaced* the real one (a non-root
+    `simpledeploy stop <typo>` reported a permission problem instead of "app
+    not found"). The state directory is already a hard dependency of every
+    command, is created on demand, and the service container bind-mounts it at
+    the same host path — so a containerised deploy and a host CLI still contend
+    on the same file. It is also the right scope: two users with different
+    state files are separate installs, not racers.
+  - **Existence is checked BEFORE the lock** in `stop`/`restart`/`remove`/
+    `redeploy`, so an unknown app answers "not found" rather than whatever the
+    lock has to say. `TestUnknownAppReportsNotFound_NotALockError` pins it.
+  - It must not be placed inside the app directory: deploy's abort path removes
+    that directory wholesale.
   - It lives in its own package so `internal/webhook` can recognise contention
     via `errors.Is(err, applock.ErrHeld)` without importing `cli`.
   - **Contention on the webhook path is retried, not logged and dropped.** The
@@ -283,6 +296,34 @@ the real generators perform).
   crash-looping first deploy is the common case — returning early left the
   operator with `Webhook: true` in `list` and no way to finish the wiring short
   of reading `state.json`.
+
+### Verifying a change
+
+`go test ./...` on Windows is not sufficient evidence. Two defects reached
+`main` because the local run could not see them, and both would have hit CI:
+
+- **Run the suite on Linux, as a non-root user.** `/opt/simpledeploy` resolves
+  somewhere writable on Windows, so a lock that required creating it passed
+  locally and failed on CI. A faithful check:
+
+  ```sh
+  docker run --rm -u 1000:1000 -e HOME=/tmp -e GOCACHE=/tmp/gocache \
+    -e GOPATH=/tmp/gopath -v "$PWD:/src" -w /src golang:1.23 \
+    sh -c "go vet ./... && go test -p=1 -count=1 ./..."
+  ```
+
+  Add `CGO_ENABLED=1` for `-race`; the race detector needs cgo, and a run
+  without it silently does nothing. Two unit tests need the `docker` binary and
+  skip without it, so a container lacking Docker is fine but not complete.
+- **The race detector is timing-dependent.** A leaked goroutine in a test
+  (`go Route(...)`) raced the package-level injectable vars for a long time and
+  only ever tripped on Linux. Passing `-race` on one OS is not proof.
+- **Match CI's Go version.** The `go` directive in `go.mod` gates language
+  features but NOT standard-library APIs, so a function added after 1.23
+  compiles locally on a newer toolchain and breaks CI. `GOTOOLCHAIN=go1.23.0 go
+  build ./...` settles it.
+- **Run gosec with the workflow's exact arguments** (`.github/workflows/
+  security.yml`); it is a push-triggered gate that nothing else covers.
 
 ### Known limitations (deliberate, not defects)
 

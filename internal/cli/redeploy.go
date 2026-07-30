@@ -35,6 +35,21 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Existence first, lock second: an unknown app name must answer "not found"
+	// rather than whatever the lock has to say. The record read here is only
+	// used for values that do not change under us (repo, branch, domain); the
+	// deploy's own result is written back through UpdateApp, which re-reads
+	// under the state lock and fails if the app was removed meanwhile.
+	app, err := state.GetApp(appName)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := state.GetConfig()
+	if err != nil {
+		return err
+	}
+
 	// Serialize deploys of this app ACROSS PROCESSES before touching anything.
 	// The webhook server's in-memory lock does not cover a CLI redeploy run by
 	// hand, and the two racing corrupted each other: parallel `git pull` of the
@@ -45,16 +60,6 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 		return err
 	}
 	defer releaseLock()
-
-	app, err := state.GetApp(appName)
-	if err != nil {
-		return err
-	}
-
-	cfg, err := state.GetConfig()
-	if err != nil {
-		return err
-	}
 
 	wizard.Info(fmt.Sprintf("Redeploying %s...", appName))
 

@@ -15,6 +15,13 @@ func RunStop(args []string) error {
 		return err
 	}
 
+	// Existence first, lock second: a typo'd app name must answer "not found"
+	// rather than whatever the lock has to say about a directory it would have
+	// to create.
+	if _, err := stateGetApp(appName); err != nil {
+		return fmt.Errorf("app %q not found", appName)
+	}
+
 	// Take the deploy lock. UpdateApp alone was not enough: a redeploy running
 	// concurrently would `docker compose up` the container back up — defeating
 	// the stop outright — and then write Status:"running" from its own
@@ -25,10 +32,6 @@ func RunStop(args []string) error {
 		return err
 	}
 	defer releaseLock()
-
-	if _, err := stateGetApp(appName); err != nil {
-		return fmt.Errorf("app %q not found", appName)
-	}
 
 	containerName := docker.ContainerName(appName)
 	wizard.Info(fmt.Sprintf("Stopping %s...", appName))

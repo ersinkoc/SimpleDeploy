@@ -15,6 +15,11 @@ func RunRestart(args []string) error {
 		return err
 	}
 
+	// Existence first, lock second — see stop.go.
+	if _, err := stateGetApp(appName); err != nil {
+		return fmt.Errorf("app %q not found", appName)
+	}
+
 	// Same reasoning as stop: a concurrent redeploy would recreate the
 	// container and overwrite the status this command records.
 	releaseLock, err := acquireDeployLock(appName)
@@ -22,10 +27,6 @@ func RunRestart(args []string) error {
 		return err
 	}
 	defer releaseLock()
-
-	if _, err := stateGetApp(appName); err != nil {
-		return fmt.Errorf("app %q not found", appName)
-	}
 
 	containerName := docker.ContainerName(appName)
 	wizard.Info(fmt.Sprintf("Restarting %s...", appName))

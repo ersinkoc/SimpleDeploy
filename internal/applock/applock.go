@@ -62,8 +62,23 @@ var (
 // Waiting would read as a hang at an interactive prompt, and the one caller
 // that genuinely should wait retries around ErrHeld instead.
 func Acquire(appName string) (release func(), err error) {
-	dir := config.AppsDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Locks live in the STATE directory, not AppsDir.
+	//
+	// AppsDir is /opt/simpledeploy/apps, which only root can create. Putting
+	// locks there meant taking a lock could fail with
+	// "mkdir /opt/simpledeploy: permission denied" — and because the lock is
+	// taken before anything else, that error replaced the real one: a
+	// non-root `simpledeploy stop <typo>` reported a permission problem
+	// instead of "app not found". The state directory is the right home: every
+	// command already depends on it being writable (state.json lives there),
+	// it is created on demand, and the service container bind-mounts it at the
+	// same host path with SIMPLEDEPLOY_STATE_DIR pointing at it — so a
+	// containerised webhook deploy and a host CLI still contend on the same
+	// file. Scoping the lock to the state directory also matches the scope of
+	// the state itself: two users with different state files are separate
+	// installs with separate apps, not racers.
+	dir := config.HomeDataDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create %s: %w", dir, err)
 	}
 	lockPath := filepath.Join(dir, "."+appName+lockSuffix)

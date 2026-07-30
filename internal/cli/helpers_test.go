@@ -477,6 +477,11 @@ func TestBuildComposeData_DBHealthCheck(t *testing.T) {
 }
 
 func TestGetStateDir(t *testing.T) {
+	// Assert the DEFAULT path, so the override must be cleared: TestMain sets
+	// one package-wide to keep per-app lock files out of the developer's real
+	// ~/.simpledeploy.
+	t.Setenv(cfgpkg.StateDirEnv, "")
+
 	dir := getStateDir()
 	if dir == "" {
 		t.Error("getStateDir should not be empty")
@@ -814,7 +819,12 @@ func TestRunStatus_WithState(t *testing.T) {
 		t.Error("Output should contain app name")
 	}
 
-	// Verify docker.ContainerStatus works for non-existent containers
+	// Verify docker.ContainerStatus works for non-existent containers. Needs a
+	// real daemon: without one the call fails on the missing binary, which
+	// tests nothing about the code and made this red wherever Docker is absent.
+	if !docker.IsInstalled() {
+		return
+	}
 	status, err := docker.ContainerStatus(context.Background(), "qd-nonexistent")
 	if err != nil {
 		t.Errorf("ContainerStatus should not error for missing containers: %v", err)

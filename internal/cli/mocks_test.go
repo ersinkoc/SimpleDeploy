@@ -164,7 +164,24 @@ func TestRoute_WebhookInvalidPort(t *testing.T) {
 	dir := t.TempDir()
 	state.InitState(dir)
 	state.SaveConfig(&state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com", WebhookPort: 9000, WebhookSecret: "s"})
-	go Route([]string{"webhook", "start", "--port", "invalid"})
+
+	// Synchronous, and the error is asserted. This used to be `go Route(...)`,
+	// which leaked a goroutine that outlived the test and kept running CLI code
+	// — touching the package-level injectable vars while OTHER tests swapped
+	// them. The race detector caught it on Linux (TestRunInit_GenerateSecretError
+	// swapping stateGenerateSecret underneath it); on Windows the timing simply
+	// never overlapped, so `go test -race` passed there and could still have
+	// turned the race workflow red on CI.
+	//
+	// The goroutine was never needed: an invalid --port is rejected during
+	// argument parsing, so this returns immediately without starting a listener.
+	err := Route([]string{"webhook", "start", "--port", "invalid"})
+	if err == nil {
+		t.Fatal("an invalid --port must be rejected")
+	}
+	if !strings.Contains(err.Error(), "invalid --port") {
+		t.Errorf("error should name the bad flag value, got: %v", err)
+	}
 }
 
 func TestReplaceAppImage_NoImageLine(t *testing.T) {

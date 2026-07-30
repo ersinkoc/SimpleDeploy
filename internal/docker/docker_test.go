@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -558,9 +559,17 @@ func TestCreateNetwork_Error(t *testing.T) {
 	}
 }
 
+// TestIsInstalled checks the detector against the real environment, so it can
+// only assert anything where Docker is actually present. It used to fail
+// outright otherwise, which made `go test ./...` red for any contributor
+// without Docker and on any CI image that does not ship it — a failure that
+// says nothing about the code.
 func TestIsInstalled(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("Docker not installed; nothing for IsInstalled to detect")
+	}
 	if !IsInstalled() {
-		t.Error("Docker should be installed in test environment")
+		t.Error("IsInstalled should report true when docker is on PATH")
 	}
 }
 
