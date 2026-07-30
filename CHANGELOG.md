@@ -12,15 +12,27 @@ regressions they had introduced.
 
 ### Test coverage for the gaps that produced these bugs
 
-Three gaps CLAUDE.md named as the source of shipped bugs now have opt-in
-integration tests (`SIMPLEDEPLOY_INTEGRATION=1`), each covering something a unit
-test provably cannot: what a container's environment actually **receives** (the
-only way to verify the `$`-escaping contract, since Compose interpolates after
-the YAML parse), crash-loop detection against **real** Docker restart timing
-(a stub cannot produce the restarting/running flicker that made a single status
-read report a crash-looping deploy as a success), and the single-file
-**bind-mount** contract (writeCaddyfile and an atomic writer produce
-byte-identical files — only a real mount tells them apart).
+Every gap CLAUDE.md named as the source of shipped bugs now has a test, each
+covering something a unit test provably cannot. The Docker-backed ones are
+opt-in (`SIMPLEDEPLOY_INTEGRATION=1`):
+
+- **What a container's environment actually receives** — the only way to verify
+  the `$`-escaping contract, since Compose interpolates after the YAML parse and
+  a text assertion cannot see it.
+- **Crash-loop detection against real Docker restart timing** — a stub cannot
+  produce the restarting/running flicker that made a single status read report a
+  crash-looping deploy as a success.
+- **The single-file bind-mount contract** — `writeCaddyfile` and an atomic
+  writer emit byte-identical files, so only a real mount tells them apart.
+- **The fresh-install path** — every other state test points `InitState` at a
+  directory that already exists, which is why "every first-ever init dies with
+  could not acquire state lock" shipped.
+- **The full chain, end to end** — a real deploy (real build, real container
+  answering HTTP), a real signed push over real HTTP to a real webhook server, a
+  redeploy that replaces the running version, then a push of a genuinely
+  crashing build proving the **rollback fires**: the previous version serves
+  again, `CurrentImage` still names the last working image, and the rolled-back
+  attempt does not count as a deploy.
 
 ### Regressions found by reviewing the fixes (all fixed here)
 

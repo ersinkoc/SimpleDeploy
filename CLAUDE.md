@@ -332,12 +332,31 @@ assertion that could not have caught its bug:
   orphaning test skips itself there with an explanation. The constraint is real
   on native Linux Docker, which is what SimpleDeploy targets.
 
-Still uncovered:
+The remaining two are now covered as well:
 
-- Tests point `InitState` at a `t.TempDir()` that **already exists**, so no test
-  ever exercised the fresh-install path.
-- No test drives the full `init` → `deploy` → push → rollback chain end to end;
-  the pieces are covered individually.
+- **The fresh-install path** (`TestFreshInstall_*` in `internal/state`). Every
+  other test in that package points `InitState` at a `t.TempDir()` that already
+  exists, which is exactly why the ENOENT-misread-as-contention bug — every
+  first-ever `simpledeploy init` dying with "could not acquire state lock" —
+  was invisible.
+- **The full chain** (`TestEndToEnd_DeployPushRedeployRollback` in
+  `internal/cli`). Real `deploy` (real build, real compose up, real container
+  answering HTTP), a real signed push over real HTTP to a real webhook server,
+  a redeploy that replaces the running version, then a push of a genuinely
+  crashing build to prove the **rollback actually fires** — asserting the
+  previous version is serving again, `CurrentImage` still names the last working
+  image, and `DeployCount` did not count the rolled-back attempt. Notes for
+  whoever touches it:
+  - git is the one substitution: `ValidateRepoURL` refuses local paths at the
+    input layer by design, so a directory cannot act as a remote without
+    standing up a git server. `gitClone`/`gitPull` copy from a fixture
+    directory, and mutating that directory is how the test simulates a push.
+  - The fixture app serves over a `nc` loop, not a web server: alpine's base
+    busybox has no `httpd` applet (it lives in `busybox-extras`), and installing
+    one would put a network fetch in every build the test performs.
+  - It sets `containerStableFor` back to a realistic value; the package's
+    `TestMain` drops it to 10 ms for speed, which would defeat the very timing
+    this test exists to exercise.
 
 ### Environment Variables
 

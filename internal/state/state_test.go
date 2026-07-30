@@ -889,3 +889,75 @@ func TestSaveApp_CreatesStateDirOnFreshInstall(t *testing.T) {
 		t.Fatalf("GetApp after fresh SaveApp: %v", err)
 	}
 }
+
+// TestFreshInstall_StateDirDoesNotExistYet exercises the path every real first
+// run takes and no test ever did: a state directory that does NOT exist yet.
+//
+// tempStateDir — used by every other test here — points InitState at a
+// t.TempDir() that already exists, which is exactly why the shipped bug was
+// invisible. On a fresh install nothing has created ~/.simpledeploy, `init`
+// calls SaveConfig as its first write, and SaveConfig takes the file lock
+// BEFORE saveStateLocked gets a chance to MkdirAll. The lock's O_CREATE then
+// failed with ENOENT, which the retry loop misread as "someone else holds the
+// lock" — so every first-ever `simpledeploy init` spun for a second and died
+// with "could not acquire state lock after 100 retries", naming a lock file
+// that had never existed.
+func TestFreshInstall_StateDirDoesNotExistYet(t *testing.T) {
+	// Several levels deep, so a single MkdirAll-less parent is not enough.
+	base := filepath.Join(t.TempDir(), "home", "user", ".simpledeploy")
+	if _, err := os.Stat(base); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s must not exist, stat err = %v", base, err)
+	}
+	InitState(base)
+
+	cfg := &GlobalConfig{
+		BaseDomain:    "apps.example.com",
+		Proxy:         "traefik",
+		AcmeEmail:     "admin@example.com",
+		WebhookPort:   9000,
+		WebhookSecret: "whk_test",
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("first-ever SaveConfig must create the state directory, got: %v", err)
+	}
+
+	got, err := GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig after fresh install: %v", err)
+	}
+	if got.BaseDomain != cfg.BaseDomain {
+		t.Errorf("BaseDomain = %q, want %q", got.BaseDomain, cfg.BaseDomain)
+	}
+
+	// The state file must exist with the restrictive mode it is documented to
+	// have — it holds the webhook secret in plaintext.
+	info, err := os.Stat(filepath.Join(base, "state.json"))
+	if err != nil {
+		t.Fatalf("state.json should exist after SaveConfig: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Errorf("state.json mode = %o, want 0600", perm)
+		}
+	}
+
+	// And the lock must have been released, so the NEXT write works too — the
+	// bug's symptom was a lock that was reported as held but never existed.
+	if err := SaveApp(&AppConfig{Name: "firstapp"}); err != nil {
+		t.Fatalf("second write after a fresh install: %v", err)
+	}
+}
+
+// TestFreshInstall_SaveAppCreatesStateDir covers the same path via the other
+// entry point that takes the lock before any MkdirAll.
+func TestFreshInstall_SaveAppCreatesStateDir(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "fresh", ".simpledeploy")
+	InitState(base)
+
+	if err := SaveApp(&AppConfig{Name: "app", Branch: "main"}); err != nil {
+		t.Fatalf("SaveApp on a fresh install must create the state directory, got: %v", err)
+	}
+	if _, err := GetApp("app"); err != nil {
+		t.Fatalf("GetApp: %v", err)
+	}
+}
