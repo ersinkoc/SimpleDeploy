@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -31,14 +32,29 @@ func VerifyGitHubSignature(body []byte, signature string, secret string) bool {
 	return hmac.Equal(sig, expectedMAC)
 }
 
+// extractRefFromPayload pulls the "ref" field out of a push payload. It
+// understands both delivery modes GitHub offers: application/json (the body IS
+// the JSON document) and application/x-www-form-urlencoded (the body is
+// payload=<urlencoded JSON>). The form mode used to be unparseable here, which
+// left ref empty — and an empty ref skips the branch filter entirely, so a
+// repository configured with the form content type redeployed on every push to
+// every branch. The HMAC is unaffected either way: providers sign the raw
+// body, and verification runs on the raw body before this is called.
 func extractRefFromPayload(body string) string {
 	var payload struct {
 		Ref string `json:"ref"`
 	}
-	if err := json.Unmarshal([]byte(body), &payload); err != nil {
-		return ""
+	if err := json.Unmarshal([]byte(body), &payload); err == nil {
+		return payload.Ref
 	}
-	return payload.Ref
+	if vals, err := url.ParseQuery(body); err == nil {
+		if p := vals.Get("payload"); p != "" {
+			if err := json.Unmarshal([]byte(p), &payload); err == nil {
+				return payload.Ref
+			}
+		}
+	}
+	return ""
 }
 
 func VerifyGitLabToken(r *http.Request, token string) bool {

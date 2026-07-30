@@ -52,6 +52,8 @@ var (
 	dockerEnsureDocker       = docker.EnsureDocker
 	proxySetupTraefik        = proxy.SetupTraefik
 	proxySetupCaddy          = proxy.SetupCaddy
+	proxyStopTraefik         = proxy.StopTraefik
+	proxyStopCaddy           = proxy.StopCaddy
 	proxyAddCaddyApp         = proxy.AddCaddyApp
 	proxyReloadCaddy         = proxy.ReloadCaddy
 	proxyRemoveCaddyApp      = proxy.RemoveCaddyApp
@@ -61,6 +63,7 @@ var (
 	stateSaveConfig          = state.SaveConfig
 	stateGetApp              = state.GetApp
 	stateSaveApp             = state.SaveApp
+	stateUpdateApp           = state.UpdateApp
 	stateRemoveApp           = state.RemoveApp
 	stateLoad                = state.Load
 	stateEncrypt             = state.Encrypt

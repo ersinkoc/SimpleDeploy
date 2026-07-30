@@ -1259,3 +1259,60 @@ func TestFilterCaddyDomain_NoMatch(t *testing.T) {
 		t.Errorf("foo block should be preserved when filtering an unrelated domain:\n%s", out)
 	}
 }
+
+// TestRemoveCaddyApp_RejectsEmptyDomain pins that an app record with no domain
+// cannot destroy the Caddyfile's global block.
+//
+// filterCaddyDomain matches on `domain+"{"`, so with an empty domain it matched
+// the bare `{` line SetupCaddy writes as the global block — deleting the ACME
+// email configuration, which the caller's ReloadCaddy then made live. `remove`
+// reaches this with app.Domain straight from state.json, so a legacy or
+// hand-edited record was enough to trigger it.
+func TestRemoveCaddyApp_RejectsEmptyDomain(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	initial := "{\n    email test@test.com\n}\n\napp1.example.com {\n    reverse_proxy qd-app1:3000\n}\n"
+	if err := os.WriteFile(caddyfilePath, []byte(initial), 0644); err != nil {
+		t.Fatalf("seed Caddyfile: %v", err)
+	}
+
+	if err := RemoveCaddyApp(""); err == nil {
+		t.Error("RemoveCaddyApp must reject an empty domain")
+	}
+
+	data, err := os.ReadFile(caddyfilePath)
+	if err != nil {
+		t.Fatalf("read Caddyfile: %v", err)
+	}
+	if string(data) != initial {
+		t.Errorf("Caddyfile must be untouched after a rejected removal; got:\n%s", data)
+	}
+	if !strings.Contains(string(data), "email test@test.com") {
+		t.Error("the global block (ACME email) must survive")
+	}
+}
+
+// TestAddCaddyApp_UsesStateDomainValidator pins that the Caddy path accepts
+// exactly the domains every other sink accepts. safeDomainRe alone admitted
+// uppercase, underscores, empty labels and unbounded length — values
+// state.ValidateAppDomain rejects — so a Caddy-mode install could hold a site
+// address no other component would accept.
+func TestAddCaddyApp_UsesStateDomainValidator(t *testing.T) {
+	dir := setupTestProxyDir(t)
+	caddyfilePath := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644); err != nil {
+		t.Fatalf("seed Caddyfile: %v", err)
+	}
+
+	rejected := []string{
+		"App1.Example.com",   // uppercase
+		"under_score.ex.com", // underscore
+		"a..b.example.com",   // empty label
+		"trailing-.ex.com",   // label ends with '-'
+	}
+	for _, d := range rejected {
+		if err := AddCaddyApp("valid", d, 3000, nil); err == nil {
+			t.Errorf("AddCaddyApp should reject domain %q (state.ValidateAppDomain does)", d)
+		}
+	}
+}

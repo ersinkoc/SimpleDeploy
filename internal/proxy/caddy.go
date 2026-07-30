@@ -185,6 +185,12 @@ func SetupCaddy(ctx context.Context, acmeEmail string) error {
 	return nil
 }
 
+// safeDomainRe is kept only as a fast structural pre-check; the authoritative
+// check is state.ValidateAppDomain, which callers below use. On its own this
+// pattern is weaker than the state validators — it admits uppercase, `_`,
+// empty/consecutive labels ("a..b.com"), labels ending in `-`, and has no
+// length cap — so relying on it alone left the Caddy path accepting domains
+// every other sink rejects.
 var safeDomainRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,}$`)
 
 // escapeCaddyValue escapes a value for safe use in a Caddyfile.
@@ -208,6 +214,13 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 	// could otherwise inject Caddyfile directives.
 	if err := state.ValidateAppName(appName); err != nil {
 		return fmt.Errorf("invalid app name: %w", err)
+	}
+	// Same validator the compose/Traefik path uses, so a domain is either
+	// acceptable everywhere or nowhere. safeDomainRe alone let through values
+	// ValidateAppDomain rejects (see its comment), which is how a Caddy-mode
+	// install could hold a site address that no other component would accept.
+	if err := state.ValidateAppDomain(domain); err != nil {
+		return fmt.Errorf("invalid domain %q: %w", domain, err)
 	}
 	if !safeDomainRe.MatchString(domain) {
 		return fmt.Errorf("invalid domain: %q", domain)
@@ -274,6 +287,16 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 }
 
 func RemoveCaddyApp(domain string) error {
+	// An empty domain is not a harmless no-op here: filterCaddyDomain matches
+	// on `domain+"{"`, so with domain == "" it matches the bare `{` line that
+	// SetupCaddy writes as the Caddyfile's GLOBAL block — deleting the ACME
+	// email configuration, which the caller's ReloadCaddy then makes live.
+	// `remove` reaches this with app.Domain straight from state.json, so a
+	// legacy or hand-edited record with no domain was enough to trigger it.
+	if err := state.ValidateAppDomain(domain); err != nil {
+		return fmt.Errorf("refusing to remove Caddy block for invalid domain %q: %w", domain, err)
+	}
+
 	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
 	data, err := os.ReadFile(caddyfilePath)
 	if err != nil {

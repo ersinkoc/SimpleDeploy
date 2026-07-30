@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
 var (
@@ -26,7 +28,48 @@ func tokenEnv(askpass, token string) []string {
 	)
 }
 
+// validateGitRefs guards the values that become git argv elements.
+//
+// This is the defense-in-depth check every other sink in SimpleDeploy already
+// performs (compose.Generate, AddCaddyApp, SetupWebhookRoute and
+// runner.InstallService all re-validate), and git was the one that did not —
+// while being the highest-consequence sink and the one the unattended webhook
+// path uses. RunRedeployContext passes app.Branch straight from state.json into
+// `git fetch` and never calls compose.Generate, so the compose-layer check is
+// not on that path at all: a tampered or legacy state file with
+// `"branch": "--upload-pack=..."` or `"--all"` had git parse it as a FLAG,
+// which is exactly what ValidateBranch's alphanumeric-first-character rule
+// prevents.
+//
+// The repository URL is deliberately NOT put through state.ValidateRepoURL
+// here. That validator encodes an input-layer POLICY — only remote https/git/
+// scp-style URLs may be deployed — which belongs where the operator supplies
+// the value (deploy.go does apply it). Enforcing it in this transport-level
+// function would also forbid cloning from a local path, which is legitimate
+// for callers and for the test suite. What matters at this sink is narrower:
+// the value must not be readable as an option, and must not carry control
+// characters.
+func validateGitRefs(repoURL, branch string) error {
+	if repoURL == "" {
+		return fmt.Errorf("repository URL cannot be empty")
+	}
+	if strings.HasPrefix(repoURL, "-") {
+		return fmt.Errorf("unsafe repository URL %q: must not start with '-' (git would parse it as an option)", repoURL)
+	}
+	if strings.ContainsAny(repoURL, "\x00\r\n") {
+		return fmt.Errorf("unsafe repository URL: contains control characters")
+	}
+	if err := state.ValidateBranch(branch); err != nil {
+		return fmt.Errorf("unsafe branch: %w", err)
+	}
+	return nil
+}
+
 func Clone(ctx context.Context, repoURL, branch, destDir, token string) error {
+	if err := validateGitRefs(repoURL, branch); err != nil {
+		return err
+	}
+
 	if err := osMkdirAll(filepath.Dir(destDir), 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -79,6 +122,13 @@ func Clone(ctx context.Context, repoURL, branch, destDir, token string) error {
 // Untracked files survive the reset, which matters: a generated Dockerfile and
 // .dockerignore live in this directory and must not be discarded.
 func Pull(ctx context.Context, repoDir, branch string, token ...string) error {
+	// Only the branch is an argv element here (the remote is whatever `origin`
+	// already points at in the existing checkout), but it is the value that
+	// arrives unvalidated from state.json on the webhook path.
+	if err := state.ValidateBranch(branch); err != nil {
+		return fmt.Errorf("unsafe branch: %w", err)
+	}
+
 	authToken := ""
 	if len(token) > 0 {
 		authToken = token[0]

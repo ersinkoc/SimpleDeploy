@@ -111,6 +111,13 @@ func Choose(prompt string, options []string, defaultIdx int) int {
 	}
 }
 
+// MultiChoose asks for one selection, or several via the "0" sub-prompt.
+//
+// Invalid input is reported rather than swallowed. Previously any unparseable
+// or out-of-range answer just returned nil, and since the deploy wizard reads
+// nil as "no databases selected", typing `postgres` instead of `2` at the
+// database prompt silently produced an app with no database and no
+// DATABASE_URL — the only clue being a missing line in the summary.
 func MultiChoose(prompt string, options []string) []int {
 	for i, opt := range options {
 		fmt.Printf("  [%d] %s\n", i+1, opt)
@@ -123,9 +130,18 @@ func MultiChoose(prompt string, options []string) []int {
 		var result []int
 		for _, s := range strings.Split(listStr, ",") {
 			s = strings.TrimSpace(s)
-			if idx, err := strconv.Atoi(s); err == nil && idx >= 1 && idx <= len(options) {
-				result = append(result, idx)
+			if s == "" {
+				continue
 			}
+			idx, err := strconv.Atoi(s)
+			if err != nil || idx < 1 || idx > len(options) {
+				Fail(fmt.Sprintf("Ignoring invalid selection %q (expected 1-%d)", s, len(options)))
+				continue
+			}
+			result = append(result, idx)
+		}
+		if len(result) == 0 {
+			Warn("No valid selection made.")
 		}
 		return result
 	}
@@ -133,6 +149,9 @@ func MultiChoose(prompt string, options []string) []int {
 	idx, err := strconv.Atoi(input)
 	if err == nil && idx >= 1 && idx <= len(options) {
 		return []int{idx}
+	}
+	if input != "" {
+		Fail(fmt.Sprintf("Ignoring invalid selection %q (expected a number 1-%d, or 0 to pick several)", input, len(options)))
 	}
 	return nil
 }

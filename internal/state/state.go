@@ -82,12 +82,27 @@ func lockStateFile() (unlock func(), err error) {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
+	// Unique token identifying THIS acquisition, written into the lock file.
+	// unlock() removes the lock only while it still carries this token. The
+	// previous unconditional os.Remove could delete a lock a DIFFERENT live
+	// process had just created: after a stale lock was recovered by two
+	// waiters, the loser's unlock tore down the winner's fresh lock, cascading
+	// into multiple concurrent writers and silently lost state updates.
+	token := fmt.Sprintf("%d %d\n", os.Getpid(), time.Now().UnixNano())
+
 	for retries := 0; retries < 100; retries++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
-			f.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
+			f.WriteString(token)
 			f.Close()
 			return func() {
+				// Remove only our own lock. If the token no longer matches,
+				// another process recovered ours as stale (a >30s critical
+				// section, which a state save never legitimately is) and now
+				// owns the path — removing it would repeat the cascade above.
+				if data, readErr := os.ReadFile(lockPath); readErr != nil || string(data) != token {
+					return
+				}
 				os.Remove(lockPath)
 			}, nil
 		}
@@ -104,7 +119,17 @@ func lockStateFile() (unlock func(), err error) {
 		// Lock file exists, check if stale based on file age
 		info, statErr := os.Stat(lockPath)
 		if statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
-			os.Remove(lockPath)
+			// Re-stat immediately before removing and require the SAME mtime:
+			// between the stat above and this point another waiter may have
+			// recovered the stale lock and created a fresh one at this path,
+			// and blindly removing would delete that live lock. The remaining
+			// stat→remove window is microseconds and additionally requires a
+			// crashed lock holder plus two concurrent recoverers; the O_EXCL
+			// create that follows still serializes whoever wins.
+			if info2, statErr2 := os.Stat(lockPath); statErr2 == nil &&
+				info2.ModTime().Equal(info.ModTime()) {
+				os.Remove(lockPath)
+			}
 			continue
 		}
 
@@ -281,6 +306,40 @@ func RemoveApp(name string) error {
 		return err
 	}
 	delete(s.Apps, name)
+	return saveStateLocked(s)
+}
+
+// UpdateApp atomically applies mutate to the CURRENT stored record for name,
+// under both the in-process mutex and the cross-process file lock.
+//
+// This exists because the load-mutate-SaveApp pattern spans minutes for a
+// deploy (git pull + docker build happen between the load and the save), and
+// SaveApp wholesale-replaces the record with that stale copy. Two concrete
+// failures followed: a `simpledeploy remove` issued during a webhook redeploy
+// was undone when the redeploy's final SaveApp re-inserted the deleted app
+// ("resurrection"), and a `stop` issued in the same window had its
+// Status:"stopped" silently overwritten. UpdateApp re-reads the record inside
+// the critical section, refuses to touch an app that no longer exists, and
+// lets the caller set only the fields it actually owns.
+func UpdateApp(name string, mutate func(*AppConfig)) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		return fmt.Errorf("failed to lock state: %w", err)
+	}
+	defer unlock()
+
+	s, err := loadStateLocked()
+	if err != nil {
+		return err
+	}
+	app, ok := s.Apps[name]
+	if !ok {
+		return fmt.Errorf("application '%s' not found", name)
+	}
+	mutate(app)
 	return saveStateLocked(s)
 }
 

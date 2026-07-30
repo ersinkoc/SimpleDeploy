@@ -180,16 +180,27 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 	// Update state. Derived from this run's observation, not from the stored
 	// value — an app previously marked "error" must be able to recover to
 	// "running", and one we could not verify must not be claimed healthy.
-	app.CurrentImage = imageTag
+	//
+	// UpdateApp, not SaveApp: `app` was read at the top of this function and a
+	// deploy spends minutes in git pull + docker build, so writing the whole
+	// stale record back would clobber anything that changed meanwhile. Two
+	// real failures came from that — a `simpledeploy remove` issued during a
+	// webhook redeploy was undone when this save re-inserted the deleted app,
+	// and a concurrent `stop` had its status silently overwritten. UpdateApp
+	// re-reads the record under the lock and errors if the app is gone, so a
+	// removed app stays removed.
+	newStatus := "error"
 	if confirmedRunning {
-		app.Status = "running"
-	} else {
-		app.Status = "error"
+		newStatus = "running"
 	}
-	app.LastDeploy = time.Now().UTC().Format(time.RFC3339)
-	app.DeployCount++
-	if err := stateSaveApp(app); err != nil {
-		return err
+	lastDeploy := time.Now().UTC().Format(time.RFC3339)
+	if err := stateUpdateApp(appName, func(cur *state.AppConfig) {
+		cur.CurrentImage = imageTag
+		cur.Status = newStatus
+		cur.LastDeploy = lastDeploy
+		cur.DeployCount++
+	}); err != nil {
+		return fmt.Errorf("failed to record deploy in state: %w", err)
 	}
 
 	logDeploy(appDir, appName, imageTag)

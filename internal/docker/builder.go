@@ -15,7 +15,15 @@ func BuildImage(ctx context.Context, contextDir, appName string) (string, error)
 	// holds if the timestamps are monotonic. A local-time stamp repeats the
 	// same hour during a DST fall-back, so images built in that window sort as
 	// older than they are and the prune keeps the wrong three.
-	timestamp := time.Now().UTC().Format("20060102-150405")
+	// Millisecond precision, not second: two builds of the same app in the same
+	// wall-clock second (a CLI redeploy racing a webhook-triggered one, which
+	// nothing serializes across processes) produced the SAME tag. Both builds
+	// "succeeded", the tag ended up pointing at whichever finished last, the
+	// other image was silently untagged, and both runs recorded that identical
+	// tag as CurrentImage — so which code was actually deployed was
+	// nondeterministic. The format stays lexically sortable, which ListImages
+	// and CleanupOldImages depend on for recency ordering.
+	timestamp := time.Now().UTC().Format("20060102-150405.000")
 	tag := fmt.Sprintf("%s:%s", appName, timestamp)
 
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)

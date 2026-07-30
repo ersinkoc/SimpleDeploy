@@ -20,19 +20,28 @@ func RunInit() error {
 		return err
 	}
 
-	// Check if already initialized
+	// Existing configuration, if any. Needed below to detect a reconfigure that
+	// changes something already-deployed apps depend on.
+	var existing *state.GlobalConfig
 	if state.IsInitialized() {
 		if !wizard.Confirm("SimpleDeploy is already initialized. Reconfigure?", false) {
 			return nil
+		}
+		if cur, err := stateGetConfig(); err == nil {
+			existing = cur
 		}
 	}
 
 	// 2. Reverse proxy selection
 	fmt.Println()
+	defaultProxy := 1
+	if existing != nil && existing.Proxy == "caddy" {
+		defaultProxy = 2
+	}
 	proxyChoice := wizard.Choose("Select reverse proxy:", []string{
 		"Traefik (recommended, auto-discovery)",
 		"Caddy (simple, auto-SSL)",
-	}, 1)
+	}, defaultProxy)
 
 	var proxyType string
 	switch proxyChoice {
@@ -40,6 +49,37 @@ func RunInit() error {
 		proxyType = "traefik"
 	case 2:
 		proxyType = "caddy"
+	}
+
+	// Switching proxy on an existing install is a migration, not a setting
+	// change, and it used to proceed silently into a broken state: both proxies
+	// write docker-compose.yml into the SAME directory, so setup overwrote the
+	// old proxy's compose file (losing the ability to `down` it cleanly) while
+	// the old container kept holding :80/:443 — so the new proxy could not bind
+	// and `init` aborted, leaving state claiming a proxy that was not running.
+	// Already-deployed apps are also affected permanently: redeploy never
+	// regenerates compose, so apps deployed under Traefik carry Traefik labels
+	// forever and are unroutable under Caddy (and vice versa) until removed and
+	// deployed again.
+	if existing != nil && existing.Proxy != "" && existing.Proxy != proxyType {
+		fmt.Println()
+		wizard.Warn(fmt.Sprintf("This switches the reverse proxy from %s to %s.", existing.Proxy, proxyType))
+		wizard.Warn("Already-deployed apps will NOT be re-routed automatically — each must be removed and deployed again.")
+		wizard.Info(fmt.Sprintf("The running %s container must be stopped first so the new proxy can bind :80/:443.", existing.Proxy))
+		if !wizard.Confirm(fmt.Sprintf("Stop %s and continue?", existing.Proxy), false) {
+			wizard.Info("Cancelled; nothing was changed.")
+			return nil
+		}
+		var stopErr error
+		if existing.Proxy == "traefik" {
+			stopErr = proxyStopTraefik()
+		} else {
+			stopErr = proxyStopCaddy()
+		}
+		if stopErr != nil {
+			return fmt.Errorf("could not stop the existing %s proxy (stop it manually, then re-run init): %w", existing.Proxy, stopErr)
+		}
+		wizard.Success(fmt.Sprintf("Stopped %s", existing.Proxy))
 	}
 
 	// 3. Domain
@@ -63,8 +103,34 @@ func RunInit() error {
 
 	// 5. Webhook secret
 	fmt.Println()
+	// On a reconfigure, regenerating the secret invalidates every repository
+	// webhook already configured with the old one — pushes then fail
+	// verification with a 401 that is only visible in the provider's delivery
+	// log, and a running listener keeps using the old secret until restarted.
+	// The prompt used to default to Yes, so an operator pressing Enter through
+	// a re-init (say, to change the ACME email) broke push-to-deploy for every
+	// app without being told. Default to keeping the existing secret.
 	var webhookSecret string
-	if wizard.Confirm("Auto-generate webhook secret?", true) {
+	if existing != nil && existing.WebhookSecret != "" {
+		wizard.Info("A webhook secret is already configured.")
+		wizard.Warn("Replacing it means updating the secret in EVERY repository webhook and restarting the listener.")
+		if !wizard.Confirm("Keep the existing webhook secret?", true) {
+			if wizard.Confirm("Auto-generate a new webhook secret?", true) {
+				secret, err := stateGenerateSecret("whk_", 32)
+				if err != nil {
+					return fmt.Errorf("failed to generate secret: %w", err)
+				}
+				webhookSecret = secret
+				wizard.Success("Webhook secret: " + webhookSecret)
+			} else {
+				webhookSecret = wizard.AskRequired("Enter webhook secret")
+			}
+			wizard.Warn("Update this secret in every repository webhook, then restart the listener.")
+		} else {
+			webhookSecret = existing.WebhookSecret
+			wizard.Info("Keeping the existing webhook secret.")
+		}
+	} else if wizard.Confirm("Auto-generate webhook secret?", true) {
 		secret, err := stateGenerateSecret("whk_", 32)
 		if err != nil {
 			return fmt.Errorf("failed to generate secret: %w", err)

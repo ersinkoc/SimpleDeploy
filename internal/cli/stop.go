@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/docker"
+	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
 
@@ -14,8 +15,7 @@ func RunStop(args []string) error {
 		return err
 	}
 
-	app, err := stateGetApp(appName)
-	if err != nil {
+	if _, err := stateGetApp(appName); err != nil {
 		return fmt.Errorf("app %q not found", appName)
 	}
 
@@ -26,8 +26,12 @@ func RunStop(args []string) error {
 	}
 	wizard.Success(fmt.Sprintf("App %s stopped", appName))
 
-	app.Status = "stopped"
-	if err := stateSaveApp(app); err != nil {
+	// UpdateApp rather than writing back the record read above: this command
+	// only owns the Status field, and a concurrent redeploy must not have its
+	// CurrentImage/DeployCount reverted by our stale copy.
+	if err := stateUpdateApp(appName, func(cur *state.AppConfig) {
+		cur.Status = "stopped"
+	}); err != nil {
 		wizard.Warn("Failed to update app status: " + err.Error())
 	}
 	return nil

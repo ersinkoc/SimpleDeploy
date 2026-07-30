@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -295,16 +296,32 @@ func TestHandleWebhook_GitLabValidWithApp(t *testing.T) {
 	}
 }
 
+// TestHandleWebhook_DeployAlreadyInProgress covers a push arriving while a
+// deploy for the same app is still running.
+//
+// It used to be dropped outright and yet answered "200 Deploy triggered", so
+// the provider's delivery log showed success for a commit that was never
+// deployed and the running version silently lagged until the next push. The
+// server now answers 202 and re-runs the deploy once afterwards, which picks up
+// the branch tip and therefore every commit that arrived in the meantime.
 func TestHandleWebhook_DeployAlreadyInProgress(t *testing.T) {
 	webhookInitState(t)
 	webhookSaveApp(t, "myapp", "main")
 
 	srv := NewServer(9000, "secret")
 
-	deployStarted := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	firstStarted := make(chan struct{})
 	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
-		close(deployStarted)
-		time.Sleep(500 * time.Millisecond)
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 {
+			close(firstStarted)
+			time.Sleep(300 * time.Millisecond)
+		}
 		return nil
 	})
 
@@ -317,9 +334,12 @@ func TestHandleWebhook_DeployAlreadyInProgress(t *testing.T) {
 	req1.Header.Set("X-GitHub-Event", "push")
 	rec1 := httptest.NewRecorder()
 	srv.handleWebhook(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Errorf("Expected 200 for the first webhook, got %d", rec1.Code)
+	}
 
 	// Wait for deploy to start
-	<-deployStarted
+	<-firstStarted
 
 	// Second webhook while first is still running
 	req2 := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
@@ -328,12 +348,31 @@ func TestHandleWebhook_DeployAlreadyInProgress(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	srv.handleWebhook(rec2, req2)
 
-	if rec2.Code != http.StatusOK {
-		t.Errorf("Expected 200 for second webhook, got %d", rec2.Code)
+	if rec2.Code != http.StatusAccepted {
+		t.Errorf("Expected 202 for a push arriving mid-deploy, got %d", rec2.Code)
+	}
+	if !strings.Contains(rec2.Body.String(), "queued") {
+		t.Errorf("Body should say the run was queued, got %q", rec2.Body.String())
 	}
 
-	// Wait for first deploy to finish
+	// Wait for both the first deploy and its queued follow-up to finish.
 	srv.deployWg.Wait()
+
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 2 {
+		t.Errorf("Deploy handler called %d time(s), want 2 (the original plus the queued follow-up)", got)
+	}
+
+	// The lock and the pending flag must both be released afterwards, or the
+	// app could never deploy again.
+	srv.deployMu.Lock()
+	stuck := srv.deployLocks["myapp"] || srv.deployPending["myapp"]
+	srv.deployMu.Unlock()
+	if stuck {
+		t.Error("deploy lock/pending flag left set after the queued run finished")
+	}
 }
 
 func TestHandleWebhook_DeployTimeout(t *testing.T) {

@@ -74,6 +74,27 @@ func yamlQuote(s string) (string, error) {
 	return `"` + escaped + `"`, nil
 }
 
+// escapeComposeInterpolation doubles `$` so Compose passes it through
+// literally.
+//
+// YAML quoting is not the only language layer in this file: after the YAML
+// parse, Compose performs its own `$VAR` / `${VAR}` substitution on values,
+// and nothing here used to escape it. The common real-world casualty is a
+// value that legitimately contains `$` — a bcrypt hash like `$2b$12$...` made
+// `docker compose up` abort with "invalid interpolation format", killing the
+// deploy AFTER the image had been built. Quieter variants: `a$FOO` with FOO
+// unset silently became `a`, and because Compose auto-loads the project
+// directory's `.env` for interpolation — the very file holding the generated
+// database connection string — a `${DATABASE_URL}` in an operator-supplied
+// value could expand the DB password into, say, a response header.
+//
+// Applied to values only. Keys are constrained by envKeyRe / ValidateHeaderName
+// and cannot contain `$` in the env case; a `$` in a Traefik header NAME is
+// escaped here too since the label is a single interpolated value.
+func escapeComposeInterpolation(s string) string {
+	return strings.ReplaceAll(s, "$", "$$")
+}
+
 func Generate(data *ComposeData) (string, error) {
 	// Defense-in-depth: even though deploy.go validates the subdomain and
 	// app.go composes the full app domain via state.ValidateAppDomain, the
@@ -187,7 +208,7 @@ func Generate(data *ComposeData) (string, error) {
 			if !envKeyRe.MatchString(key) {
 				return "", fmt.Errorf("invalid environment variable key %q: must match [A-Za-z_][A-Za-z0-9_]*", key)
 			}
-			quoted, err := yamlQuote(val)
+			quoted, err := yamlQuote(escapeComposeInterpolation(val))
 			if err != nil {
 				return "", fmt.Errorf("invalid environment variable %s: %w", key, err)
 			}
@@ -229,7 +250,7 @@ func Generate(data *ComposeData) (string, error) {
 					return "", fmt.Errorf("invalid header value for %q in compose data: %w", key, err)
 				}
 				b.WriteString(fmt.Sprintf("      - \"traefik.http.middlewares.%s-headers.headers.customresponseheaders.%s=%s\"\n",
-					data.AppName, key, val))
+					data.AppName, escapeComposeInterpolation(key), escapeComposeInterpolation(val)))
 			}
 			b.WriteString(fmt.Sprintf("      - \"traefik.http.routers.%s.middlewares=%s-headers\"\n", data.AppName, data.AppName))
 		}
@@ -262,7 +283,7 @@ func Generate(data *ComposeData) (string, error) {
 			b.WriteString("    environment:\n")
 			for _, key := range sortedKeys(db.Env) {
 				val := db.Env[key]
-				quoted, err := yamlQuote(val)
+				quoted, err := yamlQuote(escapeComposeInterpolation(val))
 				if err != nil {
 					return "", fmt.Errorf("invalid database environment variable %s: %w", key, err)
 				}

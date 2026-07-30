@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,10 @@ func webhookSaveApp(t *testing.T, name, branch string) {
 	app.Port = 3000
 	app.Type = "node"
 	app.Status = "running"
+	// Push-to-deploy on: these fixtures exist to exercise the deploy path, and
+	// the server now honours the per-app opt-out (a disabled app answers 403
+	// and never deploys — see TestHandleWebhook_WebhookDisabled).
+	app.WebhookEnabled = true
 	if err := state.SaveApp(app); err != nil {
 		t.Fatalf("Failed to save test app: %v", err)
 	}
@@ -223,7 +228,14 @@ func TestHandleWebhook_DeployError(t *testing.T) {
 	}
 }
 
-func TestHandleWebhook_EmptyBranch(t *testing.T) {
+// TestHandleWebhook_TagPushIgnored pins that a TAG push does not deploy.
+//
+// GitHub delivers tag pushes as `X-GitHub-Event: push` with
+// `ref: refs/tags/...`, and its webhook UI cannot filter them out. Because a
+// tag ref yields no branch name, the branch check used to be skipped entirely
+// and every tag push redeployed the app despite the operator having configured
+// a specific branch.
+func TestHandleWebhook_TagPushIgnored(t *testing.T) {
 	webhookInitState(t)
 	webhookSaveApp(t, "myapp", "main")
 
@@ -234,7 +246,6 @@ func TestHandleWebhook_EmptyBranch(t *testing.T) {
 		return nil
 	})
 
-	// Tag push — branch will be empty string
 	body := `{"ref":"refs/tags/v1.0.0"}`
 	sig := webhookSignBody([]byte(body), "secret")
 	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
@@ -243,15 +254,129 @@ func TestHandleWebhook_EmptyBranch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.handleWebhook(rec, req)
 
-	// Empty branch should not mismatch (branch == "" check is skipped)
 	if rec.Code != http.StatusOK {
-		t.Errorf("Empty branch should succeed, got %d", rec.Code)
+		t.Errorf("Tag push should be acknowledged with 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not a branch") {
+		t.Errorf("Body should say the ref was ignored, got %q", rec.Body.String())
 	}
 
 	select {
 	case <-deployTriggered:
+		t.Error("A tag push must not trigger a deploy")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// TestHandleWebhook_FormEncodedPayload covers GitHub's
+// application/x-www-form-urlencoded delivery mode, where the body is
+// payload=<urlencoded JSON>. The ref used to be unparseable in that mode,
+// which left branch empty and skipped the branch filter — so a repo using this
+// content type redeployed on pushes to EVERY branch.
+func TestHandleWebhook_FormEncodedPayload(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	deployTriggered := make(chan struct{}, 1)
+	srv := NewServer(9000, "secret")
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		deployTriggered <- struct{}{}
+		return nil
+	})
+
+	// Push to a branch the app is NOT configured for: must be ignored.
+	body := "payload=" + url.QueryEscape(`{"ref":"refs/heads/dev"}`)
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if !strings.Contains(rec.Body.String(), "Branch ignored") {
+		t.Errorf("form-encoded push to 'dev' should be branch-filtered, got %q", rec.Body.String())
+	}
+	select {
+	case <-deployTriggered:
+		t.Error("form-encoded push to a non-configured branch must not deploy")
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	// The configured branch, same encoding: must deploy.
+	body = "payload=" + url.QueryEscape(`{"ref":"refs/heads/main"}`)
+	req = httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec = httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("form-encoded push to the configured branch should return 200, got %d", rec.Code)
+	}
+	select {
+	case <-deployTriggered:
 	case <-time.After(2 * time.Second):
-		t.Error("Deploy handler should have been called for tag push with empty branch")
+		t.Error("form-encoded push to the configured branch should deploy")
+	}
+	srv.deployWg.Wait()
+}
+
+// TestHandleWebhook_WebhookDisabled pins the per-app opt-out. The flag was
+// collected by the deploy wizard and displayed by `list`, but never consulted
+// here — so an app deployed with push-to-deploy declined still auto-deployed.
+func TestHandleWebhook_WebhookDisabled(t *testing.T) {
+	webhookInitState(t)
+	app := state.NewAppConfig()
+	app.Name = "optout"
+	app.Branch = "main"
+	app.Domain = "optout.example.com"
+	app.Port = 3000
+	app.WebhookEnabled = false
+	if err := state.SaveApp(app); err != nil {
+		t.Fatalf("save app: %v", err)
+	}
+
+	deployTriggered := make(chan struct{}, 1)
+	srv := NewServer(9000, "secret")
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		deployTriggered <- struct{}{}
+		return nil
+	})
+
+	body := `{"ref":"refs/heads/main"}`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/optout", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for an app with push-to-deploy disabled, got %d", rec.Code)
+	}
+	select {
+	case <-deployTriggered:
+		t.Error("An app with WebhookEnabled=false must not be deployed")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// TestHandleWebhook_OversizedPayload pins that an over-cap body is answered
+// 413 rather than being silently truncated and then reported as a signature
+// failure — which sent operators hunting for a secret mismatch that did not
+// exist.
+func TestHandleWebhook_OversizedPayload(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	srv := NewServer(9000, "secret")
+	body := strings.Repeat("x", maxWebhookBody+1024)
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("Expected 413 for an oversized payload, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,11 @@ import (
 
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
+
+// maxWebhookBody caps how much of a request body is read. Large enough for
+// any realistic push payload's `ref` to be parsed; requests beyond it are
+// answered 413 rather than silently truncated.
+const maxWebhookBody = 10 << 20
 
 var (
 	cleanupInterval    = time.Minute
@@ -116,21 +122,27 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 type Server struct {
-	Port        int
-	Secret      string
-	deploy      func(ctx context.Context, appName string) error
+	Port   int
+	Secret string
+	deploy func(ctx context.Context, appName string) error
+	// deployMu guards both maps below.
 	deployMu    sync.Mutex
 	deployLocks map[string]bool
-	deployWg    sync.WaitGroup
-	limiter     *rateLimiter
+	// deployPending records that a push arrived while a deploy for that app
+	// was already running, so exactly one follow-up run is performed after it
+	// finishes instead of losing the newer commit.
+	deployPending map[string]bool
+	deployWg      sync.WaitGroup
+	limiter       *rateLimiter
 }
 
 func NewServer(port int, secret string) *Server {
 	return &Server{
-		Port:        port,
-		Secret:      secret,
-		deployLocks: make(map[string]bool),
-		limiter:     newRateLimiter(60, time.Minute), // 60 req/min per IP
+		Port:          port,
+		Secret:        secret,
+		deployLocks:   make(map[string]bool),
+		deployPending: make(map[string]bool),
+		limiter:       newRateLimiter(60, time.Minute), // 60 req/min per IP
 	}
 }
 
@@ -164,6 +176,17 @@ func (s *Server) Start() error {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
+	// shutdownStarted is closed before Shutdown is called, shutdownDone after it
+	// returns. Both are needed to make the deployWg.Wait() below sound:
+	// ListenAndServe returns ErrServerClosed the moment Shutdown is CALLED, not
+	// when in-flight handlers finish, so without joining Shutdown a request that
+	// had passed signature verification but not yet reached deployWg.Add(1)
+	// could spawn its deploy goroutine after Wait had already returned — and
+	// process exit would kill that deploy mid-build (besides being the
+	// documented Add-races-Wait misuse of sync.WaitGroup).
+	shutdownStarted := make(chan struct{})
+	shutdownDone := make(chan struct{})
+
 	go func() {
 		<-stop
 		log.Println("Shutting down webhook server...")
@@ -171,13 +194,26 @@ func (s *Server) Start() error {
 		// Stop the rate limiter cleanup goroutine
 		s.limiter.stop()
 
+		close(shutdownStarted)
 		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 		defer cancel()
 		srv.Shutdown(ctx)
+		close(shutdownDone)
 	}()
 
 	if err := httpListenAndServe(srv); err != http.ErrServerClosed {
 		return err
+	}
+
+	// Join the shutdown only if it is ours to join. ErrServerClosed can also
+	// come from a Close/Shutdown issued elsewhere — or from a test double that
+	// never triggers the signal path — and blocking on shutdownDone in that
+	// case would hang here forever. shutdownStarted is closed before Shutdown
+	// is called, so if our goroutine is the source this select always sees it.
+	select {
+	case <-shutdownStarted:
+		<-shutdownDone
+	default:
 	}
 
 	// Wait for in-flight deploys to finish
@@ -209,9 +245,19 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read body (limit to 10 MB to prevent memory exhaustion)
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	// Read body, capped to prevent memory exhaustion. MaxBytesReader rather
+	// than LimitReader: LimitReader TRUNCATES silently at the cap, so a
+	// legitimate oversized payload (GitHub delivers up to 25 MB for large
+	// multi-commit pushes) had its HMAC computed over the truncated bytes and
+	// was answered "401 Invalid signature" — sending the operator hunting for
+	// a secret mismatch that does not exist. Answer 413 honestly instead.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "Payload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Failed to read body", http.StatusInternalServerError)
 		return
 	}
@@ -275,6 +321,19 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A ref that is present but is not a branch must not deploy. GitHub
+	// delivers TAG pushes as `X-GitHub-Event: push` with `ref:
+	// refs/tags/v1.2.3`, and its webhook config cannot filter them out — so
+	// without this check every tag push redeployed the app even though the
+	// operator configured "branch: main". Only a wholly absent ref (a
+	// provider that does not send one) still falls through as "no branch
+	// information".
+	if ref != "" && branch == "" {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "Ref ignored (not a branch)")
+		return
+	}
+
 	// Load app config and check branch
 	app, err := state.GetApp(appName)
 	if err != nil {
@@ -288,63 +347,104 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger deploy (serialized per app)
-	if s.deploy != nil {
-		s.deployWg.Add(1)
-		go func() {
-			defer s.deployWg.Done()
+	// Honour the per-app opt-out. This was never checked, so an app deployed
+	// with "Enable push-to-deploy webhook? n" still auto-deployed on every
+	// push that reached this endpoint with the global secret — while `list`
+	// displayed "Webhook: false", making the flag look authoritative when it
+	// was purely cosmetic.
+	if !app.WebhookEnabled {
+		log.Printf("Rejected push for %s: push-to-deploy is disabled for this app", appName)
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, "Push-to-deploy is disabled for %s", appName)
+		return
+	}
 
-			s.deployMu.Lock()
-			if s.deployLocks[appName] {
-				s.deployMu.Unlock()
-				log.Printf("Deploy already in progress for %s, skipping", appName)
-				return
-			}
-			// Mark deploy in progress
-			s.deployLocks[appName] = true
-			s.deployMu.Unlock()
+	// Serialize per app, and decide the HTTP answer from that BEFORE replying.
+	// The lock check used to live inside the spawned goroutine while the
+	// response was written unconditionally, so a push arriving mid-deploy was
+	// dropped and still answered "200 Deploy triggered" — the provider's
+	// delivery log showed success for a commit that was never deployed, and the
+	// running version silently lagged until the next push.
+	//
+	// A push that arrives while a deploy is running is now recorded as pending
+	// and re-run once that deploy finishes, so the newest commit always gets
+	// deployed rather than being lost.
+	if s.deploy == nil {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Deploy triggered for %s", appName)
+		return
+	}
 
+	s.deployMu.Lock()
+	if s.deployLocks[appName] {
+		s.deployPending[appName] = true
+		s.deployMu.Unlock()
+		log.Printf("Deploy already in progress for %s; queued a follow-up run", appName)
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintf(w, "Deploy in progress for %s; queued a follow-up run for this push", appName)
+		return
+	}
+	s.deployLocks[appName] = true
+	s.deployMu.Unlock()
+
+	s.deployWg.Add(1)
+	go func() {
+		defer s.deployWg.Done()
+
+		// Loop so a push that arrived mid-deploy (recorded as pending above)
+		// is served by one follow-up run rather than being dropped. The lock
+		// is held for the whole loop, so a burst of pushes collapses into at
+		// most one extra deploy — which is what the operator wants: the extra
+		// run deploys the branch tip, i.e. every queued commit at once.
+		for {
 			log.Printf("Webhook triggered deploy for %s", appName)
+			s.runDeploy(appName)
 
-			// ctx is passed to the deploy handler so it can short-circuit on
-			// timeout or shutdown. Whether real cancellation actually
-			// interrupts an in-flight deploy depends on the handler honoring
-			// ctx — RunRedeployContext checks ctx.Err() at major boundaries
-			// (between git pull, build, compose up, caddy reload, state save)
-			// but the long-running subprocess steps themselves run to their
-			// own internal timeouts. Future work can thread ctx into
-			// docker.ComposeUp / docker.BuildImage / git.Pull for true
-			// per-syscall cancellation.
-			ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
-			defer cancel()
-
-			// Run deploy in a goroutine so we can handle timeout
-			done := make(chan error, 1)
-			go func() {
-				done <- s.deploy(ctx, appName)
-			}()
-
-			// Wait for deploy to complete or timeout
-			select {
-			case err := <-done:
-				if err != nil {
-					log.Printf("Deploy failed for %s: %v", appName, err)
-				}
-			case <-ctx.Done():
-				log.Printf("Deploy for %s timed out after %v, waiting for handler to honor ctx", appName, deployTimeout)
-				<-done
-				log.Printf("Timed-out deploy for %s completed", appName)
-			}
-
-			// Release the lock
 			s.deployMu.Lock()
+			if s.deployPending[appName] {
+				delete(s.deployPending, appName)
+				s.deployMu.Unlock()
+				log.Printf("Running queued follow-up deploy for %s", appName)
+				continue
+			}
 			delete(s.deployLocks, appName)
 			s.deployMu.Unlock()
-		}()
-	}
+			return
+		}
+	}()
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Deploy triggered for %s", appName)
+}
+
+// runDeploy invokes the deploy handler once, bounded by deployTimeout.
+//
+// ctx is passed to the handler so it can short-circuit on timeout or shutdown.
+// Whether real cancellation actually interrupts an in-flight deploy depends on
+// the handler honoring ctx — RunRedeployContext checks ctx.Err() at major
+// boundaries (between git pull, build, compose up, caddy reload, state save)
+// but the long-running subprocess steps themselves run to their own internal
+// timeouts. Future work can thread ctx into docker.ComposeUp /
+// docker.BuildImage / git.Pull for true per-syscall cancellation.
+func (s *Server) runDeploy(appName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.deploy(ctx, appName)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Printf("Deploy failed for %s: %v", appName, err)
+		}
+	case <-ctx.Done():
+		log.Printf("Deploy for %s timed out after %v, waiting for handler to honor ctx", appName, deployTimeout)
+		<-done
+		log.Printf("Timed-out deploy for %s completed", appName)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

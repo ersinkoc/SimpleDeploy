@@ -171,7 +171,84 @@ the real generators perform).
   and its restart counter does not move.** `restart: unless-stopped` means a
   crash-looping container flickers between `restarting` and `running` and never
   reaches `exited`/`dead`, so a single status read reported a crash-looping
-  deploy as a success and the rollback never fired.
+  deploy as a success and the rollback never fired. `restart` verifies the same
+  way — `docker restart` exiting 0 only means the daemon started it.
+- **A command that owns only part of an app record uses `state.UpdateApp`, never
+  `SaveApp`.** `SaveApp` replaces the whole record with the caller's copy, and a
+  deploy holds that copy for minutes (git pull + build). Two failures followed:
+  a `remove` during a webhook redeploy was undone when the redeploy's final save
+  re-inserted the deleted app, and a concurrent `stop` had its status silently
+  overwritten. `UpdateApp` re-reads under the lock and errors if the app is gone.
+- **`lockStateFile`'s unlock removes the lock only while it still carries that
+  acquisition's token.** An unconditional remove deleted a lock a *different*
+  live process had just created (after two waiters recovered the same stale
+  lock), cascading into concurrent writers. Stale-lock recovery also re-stats
+  and requires an unchanged mtime before removing.
+- **Compose values have `$` doubled (`escapeComposeInterpolation`).** YAML
+  quoting is not the only layer: Compose interpolates `$VAR`/`${VAR}` in values
+  after the YAML parse. A bcrypt hash (`$2b$12$…`) made `docker compose up`
+  abort with "invalid interpolation format" *after* the image build, `a$FOO`
+  silently became `a`, and because Compose auto-loads the project directory's
+  `.env` — the file holding the generated DB connection string — a `${...}` in
+  an operator-supplied value could expand a password into a response header.
+- **git argv values are checked at the sink.** `RunRedeployContext` passes
+  `app.Branch` from state.json into `git fetch` and never calls
+  `compose.Generate`, so nothing else guards that path: `Clone`/`Pull` call
+  `state.ValidateBranch` themselves. The repo URL is only checked for
+  option-injection shape there (leading `-`, control chars) — the full
+  `ValidateRepoURL` policy belongs at the input layer, and enforcing it in the
+  transport would forbid legitimate local-path clones.
+- **Non-branch refs never deploy.** GitHub delivers TAG pushes as
+  `X-GitHub-Event: push` with `ref: refs/tags/…` and cannot filter them; an
+  empty branch used to skip the branch check entirely, so every tag push
+  redeployed. Only a wholly absent ref still means "no branch information".
+- **`extractRefFromPayload` handles both GitHub content types.** In
+  `application/x-www-form-urlencoded` mode the body is `payload=<urlencoded
+  JSON>`; parsing only raw JSON left the ref empty, which (per the point above)
+  disabled the branch filter and redeployed on pushes to every branch.
+- **The webhook body cap answers 413, never truncates.** `io.LimitReader`
+  silently truncated at the cap, so a legitimate oversized payload had its HMAC
+  computed over partial bytes and was reported as "Invalid signature" — sending
+  operators after a secret mismatch that did not exist.
+- **`app.WebhookEnabled` is enforced in the server.** It was collected by the
+  wizard and shown by `list` but never consulted, so an app deployed with
+  push-to-deploy declined still auto-deployed.
+- **`Start` joins `srv.Shutdown` before `deployWg.Wait()`.** `ListenAndServe`
+  returns `ErrServerClosed` when Shutdown is *called*, not when handlers finish,
+  so `Wait` could return before a handler reached `deployWg.Add(1)` — killing
+  that deploy at process exit (and racing `Add` against `Wait`). The join is
+  guarded by a `shutdownStarted` channel so an `ErrServerClosed` from anywhere
+  else (or a test double) does not hang.
+- **A push arriving mid-deploy is queued, not dropped.** It used to be discarded
+  while still answering `200 Deploy triggered`, so the provider's log showed
+  success for a commit that was never deployed. One follow-up run is performed
+  after the in-flight deploy (which deploys the branch tip, i.e. every queued
+  commit) and the response is `202`.
+- **Image tags carry millisecond precision.** Two builds of the same app in the
+  same second — a CLI redeploy racing a webhook one, which nothing serializes
+  across processes — produced the same tag, so which image was deployed was
+  nondeterministic. The format stays lexically sortable for `ListImages`.
+- **Deploy cleanup tears containers down before deleting the app directory.** The
+  deferred cleanup fires on any pre-`deployed` failure, including a state-save
+  error *after* startup; deleting the directory then orphaned running containers
+  with no compose file to stop them and a live proxy route.
+
+### Known limitations (deliberate, not defects)
+
+- **No cross-process per-app deploy lock.** `deployLocks` is in the webhook
+  server's memory only, so `simpledeploy redeploy X` run by hand during a
+  webhook-triggered deploy of X still races it (concurrent `git pull` of the
+  same source tree, and a rollback that can revert the peer's compose changes).
+  Millisecond image tags remove the tag collision; the rest is unguarded.
+- **The webhook listener binds all interfaces** and `service install` publishes
+  the port, because one proxy route (`host.docker.internal:<port>`) serves both
+  the host-process and containerised modes. The deploy trigger is HMAC-gated,
+  but the port should be firewalled — GitLab-token mode sends the shared secret
+  as a plain header.
+- **The rate limiter keys on `RemoteAddr`.** Behind the proxy every request
+  arrives from the bridge gateway, so 60/min is effectively global and is
+  consumed before signature verification; sustained unauthenticated traffic can
+  starve genuine deliveries with 429s.
 
 ### Testing gaps these bugs came from
 

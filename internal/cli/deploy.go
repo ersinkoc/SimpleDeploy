@@ -93,11 +93,36 @@ func RunDeploy() error {
 	// Only the build-failure path used to clean up; every other early return
 	// leaked.
 	deployed := false
+	// Set once `docker compose up` has run. From that point the app directory
+	// is not ours to delete blindly: the compose file and .env are what any
+	// later teardown needs, and containers are live. The cleanup therefore
+	// tears the containers down FIRST on those paths — previously a failure
+	// after startup (a state-save error, which the fresh-install lock bug shows
+	// is a real path) deleted the compose file and .env out from under running
+	// containers, leaving an app in no state entry, with no compose file to
+	// `down` it, and a live proxy route.
+	containersStarted := false
 	defer func() {
-		if !deployed {
-			if err := osRemoveAll(appDir); err != nil {
-				wizard.Warn(fmt.Sprintf("Failed to clean up %s after aborted deploy: %v", appDir, err))
+		if deployed {
+			return
+		}
+		if containersStarted {
+			wizard.Warn("Deploy failed after containers started; tearing them down...")
+			if err := dockerComposeDown(context.Background(), appDir); err != nil {
+				wizard.Warn("Failed to stop containers: " + err.Error())
+				wizard.Warn(fmt.Sprintf("Stop them manually before removing %s", appDir))
+				return
 			}
+			if cfg.Proxy == "caddy" && app.Domain != "" {
+				if err := proxyRemoveCaddyApp(app.Domain); err != nil {
+					wizard.Warn("Failed to remove Caddy route: " + err.Error())
+				} else if err := proxyReloadCaddy(); err != nil {
+					wizard.Warn("Failed to reload Caddy: " + err.Error())
+				}
+			}
+		}
+		if err := osRemoveAll(appDir); err != nil {
+			wizard.Warn(fmt.Sprintf("Failed to clean up %s after aborted deploy: %v", appDir, err))
 		}
 	}()
 
@@ -353,6 +378,7 @@ func RunDeploy() error {
 		}
 		return fmt.Errorf("failed to start containers: %w", err)
 	}
+	containersStarted = true
 	wizard.Success("Containers started")
 
 	// Verify the container is actually running. A single check after a fixed
@@ -393,6 +419,15 @@ func RunDeploy() error {
 	logDeploy(appDir, app.Name, imageTag)
 
 	fmt.Println()
+	// Do not claim readiness for a container we just reported as broken. The
+	// success banner used to print unconditionally, so a crash-looping deploy
+	// ended with "https://... is ready!" thirty seconds after the warning
+	// saying it was not.
+	if app.Status == "error" {
+		wizard.Warn(fmt.Sprintf("%s was deployed but is not running correctly.", app.Name))
+		wizard.Info(fmt.Sprintf("Inspect it with 'simpledeploy logs %s', then 'simpledeploy redeploy %s'.", app.Name, app.Name))
+		return nil
+	}
 	wizard.Success(fmt.Sprintf("https://%s is ready!", app.Domain))
 	if app.WebhookEnabled {
 		printWebhookHelp(cfg, app.Name, app.Branch)

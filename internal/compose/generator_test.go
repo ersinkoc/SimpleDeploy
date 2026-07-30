@@ -592,3 +592,67 @@ func TestGenerate_EnvUsesYAMLMapForm(t *testing.T) {
 		t.Errorf("env must not use the list form (quotes become literal); got:\n%s", yaml)
 	}
 }
+
+// TestGenerate_EscapesComposeInterpolation pins that `$` in a value survives
+// into the container literally.
+//
+// YAML quoting is not the only language layer in a compose file: Compose runs
+// its own `$VAR` / `${VAR}` substitution over values after the YAML parse.
+// Nothing escaped it, so a value that legitimately contains `$` broke or
+// silently changed. The headline casualty is a bcrypt hash — `$2b$12$...` made
+// `docker compose up` abort with "invalid interpolation format", failing the
+// deploy AFTER the image had been built.
+func TestGenerate_EscapesComposeInterpolation(t *testing.T) {
+	data := &ComposeData{
+		AppName: "myapp", Image: "myapp:latest", Port: 3000,
+		Domain: "myapp.example.com", ProxyType: "caddy",
+		Environment: map[string]string{
+			"BCRYPT_HASH": `$2b$12$abcdefghijklmnopqrstuv`,
+			"PLACEHOLDER": "${DATABASE_URL}",
+			"PLAIN":       "no-dollars-here",
+		},
+	}
+	yaml, err := Generate(data)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if !strings.Contains(yaml, `BCRYPT_HASH: "$$2b$$12$$abcdefghijklmnopqrstuv"`) {
+		t.Errorf("every $ in a value must be doubled so Compose passes it through; got:\n%s", yaml)
+	}
+	// A `${...}` reference must not stay live: Compose auto-loads the project
+	// directory's .env for interpolation, and that is the file holding the
+	// generated database connection string.
+	if !strings.Contains(yaml, `PLACEHOLDER: "$${DATABASE_URL}"`) {
+		t.Errorf("a ${...} reference must be escaped, not left expandable; got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, `PLAIN: "no-dollars-here"`) {
+		t.Errorf("values without $ must be unchanged; got:\n%s", yaml)
+	}
+}
+
+// TestGenerate_EscapesInterpolationInDBEnvAndHeaders covers the other two
+// value sinks: database environment blocks (which carry the generated root
+// password) and Traefik header labels.
+func TestGenerate_EscapesInterpolationInDBEnvAndHeaders(t *testing.T) {
+	data := &ComposeData{
+		AppName: "myapp", Image: "myapp:latest", Port: 3000,
+		Domain: "myapp.example.com", ProxyType: "traefik",
+		Headers: map[string]string{"X-Token": "pre$post"},
+		Databases: []DBService{{
+			Type: "postgresql", Image: "postgres:16",
+			Volume: "/var/lib/postgresql/data", VolumeName: "qd-myapp-postgresql-data",
+			Env: map[string]string{"POSTGRES_PASSWORD": "pa$$word"},
+		}},
+	}
+	yaml, err := Generate(data)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if !strings.Contains(yaml, `POSTGRES_PASSWORD: "pa$$$$word"`) {
+		t.Errorf("db env values must have $ doubled; got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, `customresponseheaders.X-Token=pre$$post`) {
+		t.Errorf("header label values must have $ doubled; got:\n%s", yaml)
+	}
+}

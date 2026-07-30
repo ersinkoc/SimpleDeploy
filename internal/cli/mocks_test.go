@@ -267,6 +267,12 @@ func TestRunRestart_Success(t *testing.T) {
 	old := dockerRestartContainer
 	dockerRestartContainer = func(ctx context.Context, name string) error { return nil }
 	defer func() { dockerRestartContainer = old }()
+	// Restart now CONFIRMS the container stayed up before recording "running" —
+	// `docker restart` exiting 0 only means the daemon started it, and an image
+	// that crashes on boot goes straight back into the restart loop.
+	oldStatus := dockerContainerStatus
+	dockerContainerStatus = func(ctx context.Context, name string) (string, error) { return "running", nil }
+	defer func() { dockerContainerStatus = oldStatus }()
 	dir := t.TempDir()
 	state.InitState(dir)
 	app := state.NewAppConfig()
@@ -278,6 +284,31 @@ func TestRunRestart_Success(t *testing.T) {
 	app, _ = state.GetApp("restarttest")
 	if app.Status != "running" {
 		t.Errorf("Status = %q, want running", app.Status)
+	}
+}
+
+// TestRunRestart_ContainerDoesNotStayUp pins the other half of that check: a
+// container the daemon restarted but which is not actually running must be
+// recorded as "error", not claimed healthy by `list`.
+func TestRunRestart_ContainerDoesNotStayUp(t *testing.T) {
+	old := dockerRestartContainer
+	dockerRestartContainer = func(ctx context.Context, name string) error { return nil }
+	defer func() { dockerRestartContainer = old }()
+	oldStatus := dockerContainerStatus
+	dockerContainerStatus = func(ctx context.Context, name string) (string, error) { return "exited", nil }
+	defer func() { dockerContainerStatus = oldStatus }()
+	dir := t.TempDir()
+	state.InitState(dir)
+	app := state.NewAppConfig()
+	app.Name = "restartbroken"
+	app.Status = "running"
+	state.SaveApp(app)
+	if err := RunRestart([]string{"restartbroken"}); err != nil {
+		t.Fatalf("Expected no error: %v", err)
+	}
+	app, _ = state.GetApp("restartbroken")
+	if app.Status != "error" {
+		t.Errorf("Status = %q, want error for a container that exited after restart", app.Status)
 	}
 }
 
@@ -1631,9 +1662,11 @@ func TestRunRedeploy_SaveAppError(t *testing.T) {
 	oldComposeUp := dockerComposeUp
 	dockerComposeUp = func(ctx context.Context, dir string) error { return nil }
 	defer func() { dockerComposeUp = oldComposeUp }()
-	oldSave := stateSaveApp
-	stateSaveApp = func(app *state.AppConfig) error { return errors.New("save fail") }
-	defer func() { stateSaveApp = oldSave }()
+	// Redeploy records the result via UpdateApp (not SaveApp) so a concurrent
+	// remove/stop cannot be clobbered by a minutes-old copy of the record.
+	oldUpdate := stateUpdateApp
+	stateUpdateApp = func(name string, mutate func(*state.AppConfig)) error { return errors.New("save fail") }
+	defer func() { stateUpdateApp = oldUpdate }()
 
 	_ = captureStdout(func() {
 		if err := RunRedeploy([]string{"savefail"}); err == nil {

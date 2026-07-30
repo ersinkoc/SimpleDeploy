@@ -2,6 +2,84 @@
 
 All notable changes to SimpleDeploy will be documented in this file.
 
+## [Unreleased]
+
+Second audit pass, from a file-by-file review of every production source file
+plus four independent adversarial reviews (concurrency, injection surface, CLI
+flow logic, webhook protocol correctness against provider documentation).
+
+### Push-to-deploy correctness
+
+- **Gitea signatures were never accepted.** `X-Gitea-Signature` carries a bare
+  hex HMAC-SHA256 digest, but verification required GitHub's `sha256=` prefix.
+  Deploys only worked because modern Gitea also sends the GitHub-compatible
+  header. The bare form is now accepted (the prefixed one still tolerated).
+- **The branch filter was silently dead in two cases.** GitHub's
+  `application/x-www-form-urlencoded` delivery mode sends `payload=<urlencoded
+  JSON>`, which the ref parser could not read — an empty ref skipped the branch
+  check, so pushes to *every* branch redeployed. Tag pushes arrive as `push`
+  events with `refs/tags/...` and hit the same hole. Both are now handled: form
+  bodies are parsed, and a non-branch ref is acknowledged without deploying.
+- **`WebhookEnabled` was never enforced.** An app deployed with push-to-deploy
+  declined still auto-deployed on every push; `list` displayed `Webhook: false`
+  the whole time. Such pushes now get 403.
+- **Pushes arriving mid-deploy were dropped but answered `200 Deploy
+  triggered`.** The provider's delivery log showed success for a commit that was
+  never deployed. One follow-up run is now queued (response `202`).
+- **Oversized payloads were reported as bad signatures.** The 10 MB read cap
+  truncated silently, so the HMAC was computed over partial bytes. Now `413`.
+
+### Concurrency and state integrity
+
+- **A removed app could be resurrected.** `remove` during a webhook redeploy was
+  undone when the redeploy's final save re-inserted its minutes-old copy of the
+  record; a concurrent `stop` likewise had its status overwritten. Commands that
+  own only part of a record now use the new `state.UpdateApp`, which re-reads
+  under the lock and fails if the app is gone.
+- **The state lock could be held by two processes at once.** Unlocking removed
+  the lock file unconditionally, so after two waiters recovered the same stale
+  lock the loser tore down the winner's fresh lock. Unlock is now token-checked
+  and stale recovery re-stats before removing.
+- **Graceful shutdown could kill a deploy it should have waited for.**
+  `ListenAndServe` returns as soon as `Shutdown` is called, so the in-flight
+  deploy wait could run before a handler had registered its deploy.
+- **Two builds in the same second collided on one image tag**, making the
+  deployed image nondeterministic. Tags now carry milliseconds.
+
+### Generated-config correctness
+
+- **`$` in any value broke or silently changed the deploy.** Compose
+  interpolates `$VAR`/`${VAR}` after the YAML parse: a bcrypt hash aborted
+  `docker compose up` *after* the image build, and `${...}` could expand a
+  generated database password (Compose auto-loads the app's own `.env`). All
+  emitted values now escape `$`.
+- **Caddy accepted domains no other component would.** `AddCaddyApp` used a
+  looser pattern than the state validators; it now applies
+  `state.ValidateAppDomain`, and validates header *values* as the Traefik path
+  already did.
+- **`remove` on an app record with no domain deleted the Caddyfile's global
+  block** (the ACME email), because the block matcher matched a bare `{`.
+- **git argv values are validated at the sink.** Redeploy passed `app.Branch`
+  from state.json into `git fetch` with nothing in between; a branch beginning
+  with `-` was parsed by git as an option.
+
+### CLI behaviour
+
+- `init` no longer silently regenerates the webhook secret on a reconfigure
+  (which broke every already-configured repository webhook), and switching proxy
+  type now stops the old proxy first and warns that existing apps are not
+  re-routed — previously it overwrote the old proxy's compose file while that
+  container still held :80/:443, leaving state describing a proxy that was not
+  running.
+- A failed deploy no longer deletes the app directory out from under *running*
+  containers; it tears them down and removes the proxy route first.
+- `deploy` no longer prints "https://… is ready!" for a container it just
+  reported as crash-looping, and `restart` verifies the container stayed up
+  instead of recording `running` unconditionally.
+- An invalid answer at a multi-select prompt is reported instead of silently
+  meaning "none" — a typo at the database prompt used to deploy an app with no
+  database and no `DATABASE_URL`.
+
 ## [0.1.0] - 2026-07-29
 
 Audit release. Every item below is a defect that was present in 0.0.8 and is

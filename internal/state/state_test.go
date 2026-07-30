@@ -722,6 +722,110 @@ func TestLockStateFile_StaleByAge(t *testing.T) {
 	unlock()
 }
 
+// TestLockStateFile_UnlockLeavesForeignLock pins that unlock() removes only the
+// lock it created.
+//
+// The previous unconditional os.Remove could delete a lock a DIFFERENT live
+// process had just created: once a crashed holder's stale lock was recovered by
+// two waiters, the loser's unlock tore down the winner's fresh lock, letting a
+// third writer in while the winner was mid-write — silently losing state
+// updates.
+func TestLockStateFile_UnlockLeavesForeignLock(t *testing.T) {
+	tempStateDir(t)
+
+	unlock, err := lockStateFile()
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	// Simulate another process having taken over this lock path.
+	lockPath := getStatePath() + ".lock"
+	foreign := []byte("4242 1700000000\n")
+	if err := os.WriteFile(lockPath, foreign, 0600); err != nil {
+		t.Fatalf("overwrite lock: %v", err)
+	}
+
+	unlock()
+
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("the foreign lock must survive our unlock, but it is gone: %v", err)
+	}
+	if string(data) != string(foreign) {
+		t.Errorf("lock content = %q, want the foreign holder's %q", data, foreign)
+	}
+}
+
+// TestUpdateApp_AppliesToCurrentRecord pins that UpdateApp mutates whatever is
+// on disk NOW rather than writing back a caller's stale copy — the difference
+// that keeps a concurrent `stop` from being clobbered by a long-running
+// redeploy.
+func TestUpdateApp_AppliesToCurrentRecord(t *testing.T) {
+	tempStateDir(t)
+
+	app := NewAppConfig()
+	app.Name = "concurrent"
+	app.Branch = "main"
+	app.CurrentImage = "img:v1"
+	if err := SaveApp(app); err != nil {
+		t.Fatalf("SaveApp: %v", err)
+	}
+
+	// A "long-running deploy" holds this copy while another actor changes the
+	// record underneath it.
+	stale, err := GetApp("concurrent")
+	if err != nil {
+		t.Fatalf("GetApp: %v", err)
+	}
+	if err := UpdateApp("concurrent", func(cur *AppConfig) { cur.Status = "stopped" }); err != nil {
+		t.Fatalf("UpdateApp: %v", err)
+	}
+
+	// The deploy now records only the fields it owns.
+	stale.CurrentImage = "img:v2"
+	if err := UpdateApp("concurrent", func(cur *AppConfig) { cur.CurrentImage = "img:v2" }); err != nil {
+		t.Fatalf("UpdateApp: %v", err)
+	}
+
+	got, err := GetApp("concurrent")
+	if err != nil {
+		t.Fatalf("GetApp: %v", err)
+	}
+	if got.CurrentImage != "img:v2" {
+		t.Errorf("CurrentImage = %q, want img:v2", got.CurrentImage)
+	}
+	if got.Status != "stopped" {
+		t.Errorf("Status = %q, want the concurrently-written 'stopped' to survive", got.Status)
+	}
+}
+
+// TestUpdateApp_RemovedAppStaysRemoved pins the resurrection fix: a deploy that
+// finishes after the app was removed must fail rather than re-inserting it.
+func TestUpdateApp_RemovedAppStaysRemoved(t *testing.T) {
+	tempStateDir(t)
+
+	app := NewAppConfig()
+	app.Name = "gone"
+	if err := SaveApp(app); err != nil {
+		t.Fatalf("SaveApp: %v", err)
+	}
+	if err := RemoveApp("gone"); err != nil {
+		t.Fatalf("RemoveApp: %v", err)
+	}
+
+	err := UpdateApp("gone", func(cur *AppConfig) { cur.Status = "running" })
+	if err == nil {
+		t.Fatal("UpdateApp on a removed app should fail, not resurrect it")
+	}
+	s, loadErr := Load()
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	if _, exists := s.Apps["gone"]; exists {
+		t.Error("the removed app was resurrected in state")
+	}
+}
+
 // TestSaveConfig_CreatesStateDirOnFreshInstall is the regression test for
 // `simpledeploy init` being unable to complete on a machine that had never run
 // it — the first command every user runs.
