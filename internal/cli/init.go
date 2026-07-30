@@ -61,25 +61,23 @@ func RunInit() error {
 	// regenerates compose, so apps deployed under Traefik carry Traefik labels
 	// forever and are unroutable under Caddy (and vice versa) until removed and
 	// deployed again.
-	if existing != nil && existing.Proxy != "" && existing.Proxy != proxyType {
+	//
+	// Consent is taken HERE, but the old proxy is not stopped until every
+	// remaining input has been validated and the new config saved (see
+	// switchingProxy below). Stopping it at this point took every app on the
+	// box offline, and a typo at any later prompt — the domain and email
+	// validators abort without a retry loop — then returned an error with no
+	// proxy running at all and no hint that traffic was down.
+	switchingProxy := existing != nil && existing.Proxy != "" && existing.Proxy != proxyType
+	if switchingProxy {
 		fmt.Println()
 		wizard.Warn(fmt.Sprintf("This switches the reverse proxy from %s to %s.", existing.Proxy, proxyType))
 		wizard.Warn("Already-deployed apps will NOT be re-routed automatically — each must be removed and deployed again.")
-		wizard.Info(fmt.Sprintf("The running %s container must be stopped first so the new proxy can bind :80/:443.", existing.Proxy))
+		wizard.Info(fmt.Sprintf("The running %s container will be stopped so the new proxy can bind :80/:443 — apps are briefly unreachable.", existing.Proxy))
 		if !wizard.Confirm(fmt.Sprintf("Stop %s and continue?", existing.Proxy), false) {
 			wizard.Info("Cancelled; nothing was changed.")
 			return nil
 		}
-		var stopErr error
-		if existing.Proxy == "traefik" {
-			stopErr = proxyStopTraefik()
-		} else {
-			stopErr = proxyStopCaddy()
-		}
-		if stopErr != nil {
-			return fmt.Errorf("could not stop the existing %s proxy (stop it manually, then re-run init): %w", existing.Proxy, stopErr)
-		}
-		wizard.Success(fmt.Sprintf("Stopped %s", existing.Proxy))
 	}
 
 	// 3. Domain
@@ -172,6 +170,23 @@ func RunInit() error {
 
 	if err := stateSaveConfig(cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	// Now — after every input has been validated and the new config is
+	// persisted — stop the proxy being replaced. Doing it here means an aborted
+	// wizard never leaves the server with no proxy running, and the very next
+	// step brings the replacement up.
+	if switchingProxy {
+		var stopErr error
+		if existing.Proxy == "traefik" {
+			stopErr = proxyStopTraefik()
+		} else {
+			stopErr = proxyStopCaddy()
+		}
+		if stopErr != nil {
+			return fmt.Errorf("could not stop the existing %s proxy (stop it manually, then re-run init): %w", existing.Proxy, stopErr)
+		}
+		wizard.Success(fmt.Sprintf("Stopped %s", existing.Proxy))
 	}
 
 	// 6. Setup reverse proxy

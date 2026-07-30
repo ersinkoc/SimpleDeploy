@@ -233,16 +233,56 @@ the real generators perform).
   error *after* startup; deleting the directory then orphaned running containers
   with no compose file to stop them and a live proxy route.
 
-- **`deploy`, `redeploy` and `remove` hold a per-app file lock
-  (`acquireDeployLock`).** The webhook server's `deployLocks` map only covers
-  deploys it starts itself, so a hand-run `simpledeploy redeploy X` raced a
-  webhook-triggered deploy of X: parallel `git pull` of one source tree (git's
+- **Every command that mutates a deployment holds a per-app file lock
+  (`internal/applock`).** `deploy`, `redeploy`, `remove`, `stop` and `restart`
+  all take it. The webhook server's `deployLocks` map only covers deploys it
+  starts itself, so a hand-run `simpledeploy redeploy X` raced a webhook-
+  triggered deploy of X: parallel `git pull` of one source tree (git's
   index.lock fails one at random), a loser's rollback that reverted the winner's
   *successful* deploy, and an image prune that deleted the image the peer had
-  just built. The lock file lives in `AppsDir`, not the app directory — deploy's
-  abort path removes that directory wholesale. Contention fails fast naming the
-  holder rather than queueing, because a deploy takes minutes and waiting would
-  read as a hang.
+  just built. `stop`/`restart` need it too — without it a concurrent redeploy
+  `compose up`s the container back up and then overwrites the status, so the
+  operator's action vanishes with no error.
+  - The lock file lives in `AppsDir`, not the app directory: deploy's abort path
+    removes that directory wholesale.
+  - It lives in its own package so `internal/webhook` can recognise contention
+    via `errors.Is(err, applock.ErrHeld)` without importing `cli`.
+  - **Contention on the webhook path is retried, not logged and dropped.** The
+    handler has already answered `200 Deploy triggered`; giving up there
+    reintroduced the exact "answered success, never deployed" bug the in-process
+    queue exists to prevent. Retries are bounded by `deployTimeout`.
+  - **A write error while creating a lock is fatal to the acquisition.** An
+    empty or short-written lock file still blocks everyone else, but no longer
+    matches the token — so the owner's own release would decline to remove it
+    and the app would stay locked for `StaleAfter` (90 min). Same fix in
+    `lockStateFile`.
+  - **`InstallSignalCleanup` releases held locks on SIGINT/SIGTERM.** Go's
+    default signal handling skips deferred functions, and the deploy wizard
+    holds the lock across ~a dozen interactive prompts — Ctrl-C there left a
+    lock with a *fresh* mtime, blocking both a retry and `remove` for 90 min.
+  - **The contention message must not present the recorded pid as something to
+    look up.** A webhook deploy runs inside the `qd-service` container, so the
+    pid is namespace-local and typically 1; an operator checking `ps 1` on the
+    host would see systemd, conclude the lock was stale, delete it, and
+    re-enable the corruption above.
+- **A push that DELETED a ref never deploys.** GitHub sends a branch deletion as
+  a push event with a normal `refs/heads/<branch>` ref plus `deleted: true`, so
+  the branch filter matched it and the redeploy then failed at `git fetch` on a
+  branch that no longer exists. An all-zero `after` object id is checked too —
+  that is git's own convention and is what GitLab and Gitea send.
+- **An unparseable webhook payload is refused (400), not treated as "no branch
+  restriction".** Every gate depends on the ref, so failing open meant any body
+  the parser choked on deployed the configured branch unconditionally.
+- **A destructive migration step runs only after every input is validated.**
+  `init`'s proxy switch takes the operator's consent early but stops the old
+  proxy *after* `SaveConfig` — stopping it at the prompt took every app offline,
+  and a typo at any later prompt (the domain/email validators abort with no
+  retry loop) then returned an error with no proxy running at all.
+- **`printWebhookHelp` runs even when the container did not come up.** It is the
+  only place the payload URL and webhook secret are ever printed, and a
+  crash-looping first deploy is the common case — returning early left the
+  operator with `Webhook: true` in `list` and no way to finish the wiring short
+  of reading `state.json`.
 
 ### Known limitations (deliberate, not defects)
 

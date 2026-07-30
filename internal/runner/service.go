@@ -108,6 +108,11 @@ services:
     container_name: qd-service
     restart: unless-stopped
     command: ["webhook", "start", "--port", "%d"]
+    # Docker's default grace period is 10 s, after which it SIGKILLs — which
+    # would defeat the webhook server's graceful shutdown (it drains in-flight
+    # deploys before exiting) and kill a deploy mid-build. Matched to the
+    # server's own 35 min shutdown budget.
+    stop_grace_period: 35m
     environment:
       - SIMPLEDEPLOY_DIR=%s
       - SIMPLEDEPLOY_STATE_DIR=%s

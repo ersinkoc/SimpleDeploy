@@ -6,7 +6,50 @@ All notable changes to SimpleDeploy will be documented in this file.
 
 Second audit pass, from a file-by-file review of every production source file
 plus four independent adversarial reviews (concurrency, injection surface, CLI
-flow logic, webhook protocol correctness against provider documentation).
+flow logic, webhook protocol correctness against provider documentation) — then
+a third pass reviewing the fixes themselves, which found and corrected several
+regressions they had introduced.
+
+### Regressions found by reviewing the fixes (all fixed here)
+
+- **Ctrl-C at a wizard prompt locked an app out for 90 minutes.** The new
+  per-app lock is held across the deploy wizard's interactive prompts, and Go's
+  default signal handling skips deferred functions — so interrupting left a lock
+  behind with a fresh timestamp, blocking both a retry and `remove`. Locks are
+  now released on SIGINT/SIGTERM.
+- **A webhook push was answered `200 Deploy triggered` and then dropped** when a
+  hand-run `redeploy`/`remove` held the app lock: the deploy attempt failed
+  immediately and nothing retried, which is precisely the bug the in-process
+  queue was added to prevent. Lock contention is now retried within the deploy
+  budget.
+- **`stop` was still silently undone by a concurrent redeploy.** `UpdateApp`
+  protected the other fields but not Status, and neither `stop` nor `restart`
+  took the lock — so a redeploy restarted the container and overwrote the status.
+  Both commands now take the lock.
+- **A failed lock write made release a no-op**, leaving the app locked for 90
+  minutes; write/close errors now abort the acquisition. Same fix in the state
+  lock.
+- **The contention message invited deleting a live lock.** It reported a pid that
+  is namespace-local when the holder is the containerised service (typically 1),
+  so `ps 1` on the host looked like a crash leftover.
+- **An aborted `init` reconfigure could leave the server with no proxy running.**
+  The old proxy was stopped before the domain/email validators, which abort with
+  no retry loop — a typo took every app offline with no hint why. The stop now
+  happens after the new config is saved.
+- **A crash-looping first deploy never printed the webhook URL or secret.** The
+  new "not running correctly" branch returned before `printWebhookHelp`, which is
+  the only place either value is ever shown.
+- **Branch deletions triggered deploys.** GitHub delivers them as push events
+  with a normal `refs/heads` ref plus `deleted: true`; the new non-branch gate
+  did not catch them, so deleting the deployed branch kicked off a redeploy that
+  then failed at `git fetch`. All-zero `after` (GitLab/Gitea) is handled too.
+- **An unparseable payload deployed unconditionally.** Failing to read the body
+  left the ref empty, which skipped every gate; it is now refused with 400.
+- The webhook body cap was raised from 10 MB to GitHub's own 25 MB delivery
+  limit — a lower cap only turned "never deploys" from a misleading 401 into an
+  honest 413. The generated service compose also sets `stop_grace_period`, without
+  which Docker SIGKILLed the container 10 s into a graceful shutdown that is
+  meant to drain in-flight deploys.
 
 ### Push-to-deploy correctness
 

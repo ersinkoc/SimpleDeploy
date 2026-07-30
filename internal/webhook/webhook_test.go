@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -60,28 +61,68 @@ func TestVerifyGitHubSignature_WrongSecret(t *testing.T) {
 	}
 }
 
-func TestExtractRefFromPayload(t *testing.T) {
+func TestExtractPushInfo(t *testing.T) {
 	tests := []struct {
-		body string
-		want string
+		name        string
+		body        string
+		wantRef     string
+		wantDeleted bool
+		wantParsed  bool
 	}{
-		{`{"ref":"refs/heads/main"}`, "refs/heads/main"},
-		{`{"ref":"refs/heads/feature/branch"}`, "refs/heads/feature/branch"},
-		{`{"no_ref":true}`, ""},
-		{`{}`, ""},
-		{``, ""},
-		{`{"ref":"refs/tags/v1.0"}`, "refs/tags/v1.0"},
-		{`invalid json`, ""},
-		{`{"ref":null}`, ""},
-		{`{"ref":""}`, ""},
-		{`{"ref":"refs/heads/fix/bug-123"}`, "refs/heads/fix/bug-123"},
+		{"branch", `{"ref":"refs/heads/main"}`, "refs/heads/main", false, true},
+		{"nested branch", `{"ref":"refs/heads/feature/branch"}`, "refs/heads/feature/branch", false, true},
+		{"no ref field", `{"no_ref":true}`, "", false, true},
+		{"empty object", `{}`, "", false, true},
+		{"tag", `{"ref":"refs/tags/v1.0"}`, "refs/tags/v1.0", false, true},
+		{"null ref", `{"ref":null}`, "", false, true},
+		{"empty ref", `{"ref":""}`, "", false, true},
+		{"ref with slashes", `{"ref":"refs/heads/fix/bug-123"}`, "refs/heads/fix/bug-123", false, true},
+
+		// Unparseable bodies must be reported as such: treating them as "no ref"
+		// made the branch filter fail OPEN and deploy unconditionally.
+		{"empty body", ``, "", false, false},
+		{"not json", `invalid json`, "", false, false},
+		{"truncated json", `{"ref":"refs/heads/main"`, "", false, false},
+
+		// GitHub's form-urlencoded delivery mode.
+		{
+			"form encoded",
+			"payload=" + url.QueryEscape(`{"ref":"refs/heads/main"}`),
+			"refs/heads/main", false, true,
+		},
+
+		// Ref deletions. GitHub sends the explicit flag; every provider also
+		// signals it with an all-zero `after` object id.
+		{
+			"deleted flag",
+			`{"ref":"refs/heads/staging","deleted":true}`,
+			"refs/heads/staging", true, true,
+		},
+		{
+			"all-zero after",
+			`{"ref":"refs/heads/staging","after":"0000000000000000000000000000000000000000"}`,
+			"refs/heads/staging", true, true,
+		},
+		{
+			"normal after is not a deletion",
+			`{"ref":"refs/heads/main","after":"9a1b2c3d4e5f60718293a4b5c6d7e8f901234567"}`,
+			"refs/heads/main", false, true,
+		},
 	}
 
 	for _, tt := range tests {
-		got := extractRefFromPayload(tt.body)
-		if got != tt.want {
-			t.Errorf("extractRefFromPayload(%q) = %q, want %q", tt.body, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractPushInfo(tt.body)
+			if got.Ref != tt.wantRef {
+				t.Errorf("Ref = %q, want %q", got.Ref, tt.wantRef)
+			}
+			if got.Deleted != tt.wantDeleted {
+				t.Errorf("Deleted = %v, want %v", got.Deleted, tt.wantDeleted)
+			}
+			if got.Parsed != tt.wantParsed {
+				t.Errorf("Parsed = %v, want %v", got.Parsed, tt.wantParsed)
+			}
+		})
 	}
 }
 

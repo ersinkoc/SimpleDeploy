@@ -66,9 +66,12 @@ func ListImages(ctx context.Context, appName string) ([]string, error) {
 			images = append(images, line)
 		}
 	}
-	// Newest first. BuildImage tags every image "<app>:<YYYYMMDD-HHMMSS>", a
+	// Newest first. BuildImage tags every image "<app>:<YYYYMMDD-HHMMSS.mmm>", a
 	// format whose lexical order matches its chronological order, so a reverse
-	// string sort is a reliable recency ordering. CleanupOldImages depends on
+	// string sort is a reliable recency ordering. (Mixed old second-precision
+	// and new millisecond tags still order correctly: for an equal
+	// YYYYMMDD-HHMMSS prefix the longer millisecond string sorts greater, i.e.
+	// newer, which is chronologically right.) CleanupOldImages depends on
 	// this: it used to trust `docker images` output order, which is only
 	// coincidentally recency-sorted and is not part of the CLI's contract —
 	// meaning a prune could delete the image the app is currently running.

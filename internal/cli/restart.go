@@ -15,6 +15,14 @@ func RunRestart(args []string) error {
 		return err
 	}
 
+	// Same reasoning as stop: a concurrent redeploy would recreate the
+	// container and overwrite the status this command records.
+	releaseLock, err := acquireDeployLock(appName)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+
 	if _, err := stateGetApp(appName); err != nil {
 		return fmt.Errorf("app %q not found", appName)
 	}

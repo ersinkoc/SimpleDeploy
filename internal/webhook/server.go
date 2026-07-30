@@ -15,13 +15,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/applock"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
-// maxWebhookBody caps how much of a request body is read. Large enough for
-// any realistic push payload's `ref` to be parsed; requests beyond it are
-// answered 413 rather than silently truncated.
-const maxWebhookBody = 10 << 20
+// maxWebhookBody caps how much of a request body is read. Sized to GitHub's
+// own delivery cap (25 MB) so a legitimate large multi-commit push is not
+// rejected at all; anything beyond it is answered 413 rather than silently
+// truncated. A lower cap only converted "never deploys" from a misleading 401
+// into an honest 413 — the push still would not deploy, and providers do not
+// retry a 413.
+const maxWebhookBody = 25 << 20
+
+// lockRetryInterval is how long the deploy goroutine waits before retrying an
+// attempt that lost the cross-process app lock.
+var lockRetryInterval = 10 * time.Second
 
 var (
 	cleanupInterval    = time.Minute
@@ -316,11 +324,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if event == "" {
 		event = r.Header.Get("X-Gitea-Event")
 	}
-	ref := extractRefFromPayload(string(body))
-	// Non-branch refs (tags, notes) leave branch empty, which the check further
-	// down treats as "no branch information" rather than as a mismatch.
+	push := extractPushInfo(string(body))
+	// Non-branch refs (tags, notes) leave branch empty; the gate below turns
+	// that into a refusal rather than "no branch restriction".
 	branch := ""
-	if head, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+	if head, ok := strings.CutPrefix(push.Ref, "refs/heads/"); ok {
 		branch = head
 	}
 
@@ -341,6 +349,16 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An unreadable payload must not deploy. Every gate below depends on the
+	// ref, so treating "could not parse" as "no branch restriction" made the
+	// filter fail OPEN — any body the parser choked on would deploy the
+	// configured branch unconditionally.
+	if !push.Parsed {
+		log.Printf("Rejected push for %s: payload could not be parsed", appName)
+		http.Error(w, "Could not parse the push payload", http.StatusBadRequest)
+		return
+	}
+
 	// A ref that is present but is not a branch must not deploy. GitHub
 	// delivers TAG pushes as `X-GitHub-Event: push` with `ref:
 	// refs/tags/v1.2.3`, and its webhook config cannot filter them out — so
@@ -348,9 +366,20 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// operator configured "branch: main". Only a wholly absent ref (a
 	// provider that does not send one) still falls through as "no branch
 	// information".
-	if ref != "" && branch == "" {
+	if push.Ref != "" && branch == "" {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Ref ignored (not a branch)")
+		return
+	}
+
+	// A push that DELETED the ref is not a deploy trigger. GitHub delivers a
+	// branch deletion as a push event with a normal `refs/heads/<branch>` ref
+	// plus `deleted: true` (and an all-zero `after`), so the branch filter
+	// happily matched it: deleting the deployed branch kicked off a redeploy
+	// that then failed at `git fetch` on a branch that no longer exists.
+	if push.Deleted {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "Ref deletion ignored")
 		return
 	}
 
@@ -450,20 +479,42 @@ func (s *Server) runDeploy(appName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- s.deploy(ctx, appName)
-	}()
+	for {
+		done := make(chan error, 1)
+		go func() {
+			done <- s.deploy(ctx, appName)
+		}()
 
-	select {
-	case err := <-done:
-		if err != nil {
+		select {
+		case err := <-done:
+			if err == nil {
+				return
+			}
+			// Contention on the cross-process app lock is not a failure, it is
+			// "not yet": another process (a hand-run redeploy, a `remove`
+			// awaiting its confirmation prompt) holds the app. Retrying is what
+			// makes the 200 we already sent truthful — logging and giving up
+			// reintroduced exactly the bug this server was fixed for, a push
+			// answered "Deploy triggered" that never deployed and that nothing
+			// retried.
+			if errors.Is(err, applock.ErrHeld) {
+				log.Printf("Deploy for %s is waiting: %v", appName, err)
+				select {
+				case <-time.After(lockRetryInterval):
+					continue
+				case <-ctx.Done():
+					log.Printf("Gave up waiting for the %s app lock after %v", appName, deployTimeout)
+					return
+				}
+			}
 			log.Printf("Deploy failed for %s: %v", appName, err)
+			return
+		case <-ctx.Done():
+			log.Printf("Deploy for %s timed out after %v, waiting for handler to honor ctx", appName, deployTimeout)
+			<-done
+			log.Printf("Timed-out deploy for %s completed", appName)
+			return
 		}
-	case <-ctx.Done():
-		log.Printf("Deploy for %s timed out after %v, waiting for handler to honor ctx", appName, deployTimeout)
-		<-done
-		log.Printf("Timed-out deploy for %s completed", appName)
 	}
 }
 

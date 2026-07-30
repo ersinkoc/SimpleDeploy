@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/applock"
 	"github.com/ersinkoc/SimpleDeploy/internal/buildpack"
 	compose "github.com/ersinkoc/SimpleDeploy/internal/compose"
 	"github.com/ersinkoc/SimpleDeploy/internal/db"
@@ -69,6 +70,7 @@ var (
 	stateEncrypt             = state.Encrypt
 	stateDecrypt             = state.Decrypt
 	stateGenerateSecret      = state.GenerateSecret
+	acquireDeployLock        = applock.Acquire
 )
 
 type fileWriter interface {

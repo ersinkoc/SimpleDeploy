@@ -93,8 +93,19 @@ func lockStateFile() (unlock func(), err error) {
 	for retries := 0; retries < 100; retries++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
-			f.WriteString(token)
-			f.Close()
+			// Check the write. An empty or short-written lock file still EXISTS,
+			// so it blocks every other writer, but its content no longer matches
+			// the token — meaning our own unlock would decline to remove it and
+			// the state file would stay locked until the staleness timeout.
+			if _, werr := f.WriteString(token); werr != nil {
+				f.Close()
+				os.Remove(lockPath)
+				return nil, fmt.Errorf("failed to write state lock %s: %w", lockPath, werr)
+			}
+			if cerr := f.Close(); cerr != nil {
+				os.Remove(lockPath)
+				return nil, fmt.Errorf("failed to close state lock %s: %w", lockPath, cerr)
+			}
 			return func() {
 				// Remove only our own lock. If the token no longer matches,
 				// another process recovered ours as stale (a >30s critical

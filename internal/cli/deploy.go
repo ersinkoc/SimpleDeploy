@@ -121,7 +121,13 @@ func RunDeploy() error {
 			wizard.Warn("Deploy failed after containers started; tearing them down...")
 			if err := dockerComposeDown(context.Background(), appDir); err != nil {
 				wizard.Warn("Failed to stop containers: " + err.Error())
-				wizard.Warn(fmt.Sprintf("Stop them manually before removing %s", appDir))
+				wizard.Warn(fmt.Sprintf("Stop them manually, then remove %s", appDir))
+				// The app was never written to state, so `simpledeploy remove`
+				// cannot clean up after us — say what is left behind, including
+				// the proxy route this path could not remove.
+				if cfg.Proxy == "caddy" && app.Domain != "" {
+					wizard.Warn(fmt.Sprintf("The Caddy route for %s is still live; remove its block from the Caddyfile and reload Caddy.", app.Domain))
+				}
 				return
 			}
 			if cfg.Proxy == "caddy" && app.Domain != "" {
@@ -437,9 +443,15 @@ func RunDeploy() error {
 	if app.Status == "error" {
 		wizard.Warn(fmt.Sprintf("%s was deployed but is not running correctly.", app.Name))
 		wizard.Info(fmt.Sprintf("Inspect it with 'simpledeploy logs %s', then 'simpledeploy redeploy %s'.", app.Name, app.Name))
-		return nil
+	} else {
+		wizard.Success(fmt.Sprintf("https://%s is ready!", app.Domain))
 	}
-	wizard.Success(fmt.Sprintf("https://%s is ready!", app.Domain))
+	// Printed on BOTH paths. This is the only place the payload URL and the
+	// webhook secret are ever shown — no other command prints them — and a
+	// crash-looping first deploy is the common case, so returning early here
+	// left the operator with `Webhook: true` in `list` and no way to finish the
+	// wiring short of reading state.json by hand. Webhook setup is orthogonal
+	// to whether the container came up.
 	if app.WebhookEnabled {
 		printWebhookHelp(cfg, app.Name, app.Branch)
 	}

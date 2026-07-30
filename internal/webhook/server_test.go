@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/applock"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
@@ -474,4 +476,144 @@ func TestRateLimit_BudgetSurvivesRealisticPushVolume(t *testing.T) {
 		t.Error("the valid delivery should have triggered a deploy")
 	}
 	srv.deployWg.Wait()
+}
+
+// TestHandleWebhook_RefDeletionIgnored pins that deleting a branch does not
+// trigger a deploy. GitHub delivers a deletion as a push event with a normal
+// refs/heads ref plus `deleted: true`, so the branch filter matched it happily
+// and the redeploy then failed at `git fetch` on a branch that no longer exists.
+func TestHandleWebhook_RefDeletionIgnored(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	deployed := make(chan struct{}, 1)
+	srv := NewServer(9000, "secret")
+	defer srv.limiter.stop()
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		deployed <- struct{}{}
+		return nil
+	})
+
+	for _, body := range []string{
+		// GitHub's explicit flag.
+		`{"ref":"refs/heads/main","deleted":true}`,
+		// GitLab/Gitea signal the same thing with an all-zero `after`.
+		`{"ref":"refs/heads/main","after":"0000000000000000000000000000000000000000"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+		req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		srv.handleWebhook(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("a deletion should be acknowledged with 200, got %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "deletion ignored") {
+			t.Errorf("body should say the deletion was ignored, got %q", rec.Body.String())
+		}
+	}
+
+	select {
+	case <-deployed:
+		t.Error("a ref deletion must not trigger a deploy")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// TestHandleWebhook_UnparseablePayloadRefused pins that the branch filter fails
+// CLOSED. Every gate depends on the ref, so treating "could not parse" as "no
+// branch restriction" meant an unreadable body deployed the configured branch
+// unconditionally.
+func TestHandleWebhook_UnparseablePayloadRefused(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	deployed := make(chan struct{}, 1)
+	srv := NewServer(9000, "secret")
+	defer srv.limiter.stop()
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		deployed <- struct{}{}
+		return nil
+	})
+
+	body := `this is not a payload`
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("an unparseable payload should be refused with 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-deployed:
+		t.Error("an unparseable payload must not deploy")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+// TestRunDeploy_RetriesWhileAppLockHeld pins that contention on the
+// cross-process app lock is retried rather than logged and dropped.
+//
+// The webhook answers "200 Deploy triggered" before the deploy runs. When a
+// hand-run redeploy (or a `remove` sitting at its confirmation prompt) held the
+// app lock, the deploy attempt failed immediately, nothing retried, and the
+// provider's delivery log showed success for a commit that was never deployed —
+// exactly the bug the in-process queue was added to fix.
+func TestRunDeploy_RetriesWhileAppLockHeld(t *testing.T) {
+	oldInterval := lockRetryInterval
+	lockRetryInterval = 10 * time.Millisecond
+	defer func() { lockRetryInterval = oldInterval }()
+
+	srv := NewServer(9000, "secret")
+	defer srv.limiter.stop()
+
+	var mu sync.Mutex
+	attempts := 0
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		mu.Lock()
+		attempts++
+		n := attempts
+		mu.Unlock()
+		if n < 3 {
+			// What RunRedeployContext returns while another process holds it.
+			return fmt.Errorf("wrapped: %w", applock.ErrHeld)
+		}
+		return nil
+	})
+
+	srv.runDeploy("myapp")
+
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != 3 {
+		t.Errorf("deploy attempts = %d, want 3 (two lock refusals then success)", got)
+	}
+}
+
+// TestRunDeploy_GivesUpOnLockWhenBudgetExpires pins that the retry loop is
+// bounded by deployTimeout rather than spinning forever.
+func TestRunDeploy_GivesUpOnLockWhenBudgetExpires(t *testing.T) {
+	oldInterval, oldTimeout := lockRetryInterval, deployTimeout
+	lockRetryInterval = 5 * time.Millisecond
+	deployTimeout = 40 * time.Millisecond
+	defer func() { lockRetryInterval, deployTimeout = oldInterval, oldTimeout }()
+
+	srv := NewServer(9000, "secret")
+	defer srv.limiter.stop()
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		return fmt.Errorf("wrapped: %w", applock.ErrHeld)
+	})
+
+	done := make(chan struct{})
+	go func() { srv.runDeploy("myapp"); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDeploy should give up when the deploy budget expires, not spin forever")
+	}
 }

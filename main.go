@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/applock"
 	"github.com/ersinkoc/SimpleDeploy/internal/cli"
 	"github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
@@ -19,6 +20,14 @@ func main() {
 func run(args []string) int {
 	config.Init()
 	state.InitState(config.HomeDataDir())
+
+	// Release any per-app lock this process holds if the operator interrupts.
+	// Go's default SIGINT handling terminates without running deferred
+	// functions, and the deploy wizard holds a lock while blocking on roughly a
+	// dozen interactive prompts — so Ctrl-C there used to leave a lock behind
+	// with a fresh mtime, blocking both a retry and `remove` of that app until
+	// the file was deleted by hand or applock.StaleAfter (90 min) elapsed.
+	applock.InstallSignalCleanup(osExit)
 
 	if len(args) < 2 {
 		cli.PrintUsage()

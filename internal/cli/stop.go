@@ -15,6 +15,17 @@ func RunStop(args []string) error {
 		return err
 	}
 
+	// Take the deploy lock. UpdateApp alone was not enough: a redeploy running
+	// concurrently would `docker compose up` the container back up — defeating
+	// the stop outright — and then write Status:"running" from its own
+	// observation, so the operator's stop vanished with no error anywhere.
+	// Refusing while a deploy is in flight is the honest outcome.
+	releaseLock, err := acquireDeployLock(appName)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+
 	if _, err := stateGetApp(appName); err != nil {
 		return fmt.Errorf("app %q not found", appName)
 	}
