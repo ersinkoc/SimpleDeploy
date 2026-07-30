@@ -280,7 +280,7 @@ func TestDetect_DetectsDockerfileBeforeNode(t *testing.T) {
 
 func TestDetect_DetectsNodeBeforeGo(t *testing.T) {
 	dir := createTempRepo(t, map[string]string{
-		"package.json":  `{"name":"test"}`,
+		"package.json":     `{"name":"test"}`,
 		"requirements.txt": "flask",
 	})
 	result := Detect(dir)

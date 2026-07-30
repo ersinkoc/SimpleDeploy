@@ -75,10 +75,16 @@ the real generators perform).
 ### Key Components
 
 **State Management** (`internal/state/`)
-- State is stored in `~/.simpledeploy/state.json` (encrypted)
+- State is stored in `~/.simpledeploy/state.json` as **plain JSON, mode 0600**
+- Individual secret *fields* are encrypted, not the file: `git_token` and each
+  entry of `db_credentials` go through `state.Encrypt`. Everything else —
+  including `webhook_secret` — is plaintext, so the file is a credential and
+  must not be copied off the host
+- Encryption uses AES-256-GCM with machine-id-based key derivation, which means
+  ciphertext is only decryptable on the machine that wrote it (see the
+  `/etc/machine-id` bind mount in `internal/runner/service.go`)
 - `State` struct contains `Apps` map and `GlobalConfig`
 - `AppConfig` tracks: repo, branch, domain, port, databases, deployment history
-- Encryption uses AES-256-GCM with machine-id-based key derivation
 
 **Configuration** (`internal/config/paths.go`)
 - `BaseDir`: `/opt/simpledeploy` (or `SIMPLEDEPLOY_DIR` env var)
@@ -115,8 +121,13 @@ the real generators perform).
 
 - **App containers use `expose`, never `ports`.** A published port bypasses the
   proxy's TLS and security headers and exposes the app on the public IP.
-- **Generated compose output must be deterministic.** All maps are walked via
-  `sortedKeys`; unsorted iteration made every redeploy rewrite the file.
+- **Generated proxy/compose output must be deterministic.** Every map walked
+  while emitting config goes through a sorted-keys helper (`sortedKeys` in
+  `internal/compose`, `sortedHeaderKeys` in `internal/proxy`); unsorted
+  iteration made every redeploy rewrite the file and reload the proxy.
+- **Every `buildpack` type must appear in `mapDetectedDefault`.** An unmapped
+  type falls through to the "use existing Dockerfile" menu entry, which skips
+  Dockerfile generation and fails the build on a repo that has none.
 - **Cleanup after a CLI command must be synchronous.** Background goroutines
   launched near the end of a command do not run before the process exits.
 - **`sanitizeOutput` must never be called with an empty needle.**
@@ -126,6 +137,54 @@ the real generators perform).
   partial content earlier gets truncated by the final write.
 - **The webhook server refuses to deploy without a configured secret.** Every
   signature-verification branch is skipped when the secret is empty.
+- **Compose `environment:` blocks use YAML map form (`KEY: "value"`), never
+  list form (`- KEY="value"`).** In list form the whole item is one plain YAML
+  scalar, so the quotes are literal characters; Compose splits on the first `=`
+  and does not unquote, and the container receives `DATABASE_URL` *including*
+  the double quotes. `environment` also overrides `env_file`, so the correct
+  value in `.env` cannot rescue it.
+- **The `GIT_ASKPASS` script must be `chmod`-ed executable explicitly.**
+  `os.WriteFile`'s perm argument is ignored for a file that already exists, and
+  `os.CreateTemp` creates it at 0600 — git then cannot exec the helper and every
+  private-repo clone/pull fails with "could not read Username".
+- **Redeploy re-asserts the Caddy route, not just a reload.** `AddCaddyApp`
+  failure during deploy is only a warning, so an app can be recorded `running`
+  with no Caddyfile block; reloading alone would re-read a config that still
+  does not route it.
+- **Image tags are stamped in UTC.** `ListImages` orders by reverse string sort
+  and `CleanupOldImages` trusts that as recency; a local-time stamp repeats an
+  hour at DST fall-back and breaks the ordering.
+- **Header values must not contain braces.** `{...}` is Caddy placeholder
+  syntax (expanded even inside quotes), and `filterCaddyDomain` finds a block's
+  end by counting braces — an unbalanced one swallows the rest of the Caddyfile.
+- **`lockStateFile` creates the state directory before opening the lock.** It
+  runs before `saveStateLocked`'s `MkdirAll`, so on a fresh install the lock
+  open returned ENOENT, which the retry loop misread as contention — every
+  first-ever `simpledeploy init` died with "could not acquire state lock". Only
+  `os.IsExist` is worth retrying; any other error is permanent.
+- **The Caddyfile is written IN PLACE, never via temp+rename.** The proxy
+  compose bind-mounts it as a single file, and Docker binds that to an inode at
+  container creation. A rename orphans the mount, so the container never sees
+  another byte: Caddy kept serving a stub config, reported "config is
+  unchanged" on reload, and routed nothing.
+- **A container is only "up" if it holds `running` for `containerStableFor`
+  and its restart counter does not move.** `restart: unless-stopped` means a
+  crash-looping container flickers between `restarting` and `running` and never
+  reaches `exited`/`dead`, so a single status read reported a crash-looping
+  deploy as a success and the rollback never fired.
+
+### Testing gaps these bugs came from
+
+Several of the above were invisible to the unit suite and only surfaced in a
+real end-to-end run (`init` → `deploy` → `redeploy` → webhook → rollback against
+a live Docker daemon). When touching these areas, prefer an integration check:
+
+- Tests point `InitState` at a `t.TempDir()` that **already exists**, so no test
+  ever exercised the fresh-install path.
+- Nothing in the unit suite mounts a file into a container, so the inode/bind
+  mount contract was unrepresented.
+- Nothing asserted on what a container's environment actually **receives** —
+  only on the YAML text SimpleDeploy emits.
 
 ### Environment Variables
 

@@ -360,15 +360,29 @@ func ValidateHeaderName(name string) error {
 
 // ValidateHeaderValue checks an HTTP header value before it is interpolated
 // into proxy configuration. We reject control characters, double quotes,
-// backticks, and backslashes rather than escaping them, because such
+// backticks, backslashes, and braces rather than escaping them, because such
 // characters in a Traefik label or Caddyfile value are almost always a
 // misconfig and silently escaping them could mask the bug.
+//
+// Braces are rejected for two independent reasons, both specific to Caddy:
+//
+//   - `{...}` is Caddy's placeholder syntax and applies inside quoted strings
+//     too, so a value like `{host}` is silently expanded rather than sent
+//     literally. escapeCaddyValue does not (and should not) guess at that.
+//   - proxy.filterCaddyDomain finds the end of a site block by counting `{`
+//     against `}` per line. An UNBALANCED brace in a header value throws that
+//     count off, so removing or replacing the block — which AddCaddyApp does
+//     on every deploy, and RemoveCaddyApp on teardown — swallows the rest of
+//     the Caddyfile, taking every other app's routing with it.
 func ValidateHeaderValue(value string) error {
 	if len(value) > 4096 {
 		return fmt.Errorf("header value too long (max 4096)")
 	}
 	if strings.ContainsAny(value, "\r\n\"`\\") {
 		return fmt.Errorf("header value must not contain quotes, backticks, backslashes, or newlines")
+	}
+	if strings.ContainsAny(value, "{}") {
+		return fmt.Errorf("header value must not contain braces (reserved for Caddy placeholders)")
 	}
 	return nil
 }

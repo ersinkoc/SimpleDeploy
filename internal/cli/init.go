@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
+	cfgpkg "github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 	"github.com/ersinkoc/SimpleDeploy/internal/wizard"
 )
@@ -75,14 +77,22 @@ func RunInit() error {
 		webhookSecret = wizard.AskRequired("Enter webhook secret")
 	}
 
-	webhookPort := 9000
-	portStr := wizard.Ask("Webhook port", "9000")
-	if portStr != "" {
-		if p, err := strconv.Atoi(portStr); err == nil {
-			webhookPort = p
-		} else {
-			wizard.Warn("Invalid port number, using default 9000")
-		}
+	// The port is range-checked here, at the input layer. Everything that
+	// consumes it downstream — proxy.SetupWebhookRoute, runner.InstallService,
+	// the listener's own ":%d" bind address — rejects an out-of-range value,
+	// but by then it has already been persisted to state.json and the operator
+	// only sees "Failed to publish webhook route" at the end of a successful
+	// install. Atoi alone accepts 0, negatives, and 99999.
+	const defaultWebhookPort = 9000
+	webhookPort := defaultWebhookPort
+	portStr := wizard.Ask("Webhook port", strconv.Itoa(defaultWebhookPort))
+	switch p, err := strconv.Atoi(strings.TrimSpace(portStr)); {
+	case err != nil:
+		wizard.Warn(fmt.Sprintf("Invalid port %q, using default %d", portStr, defaultWebhookPort))
+	case p < 1 || p > 65535:
+		wizard.Warn(fmt.Sprintf("Port %d out of range (1-65535), using default %d", p, defaultWebhookPort))
+	default:
+		webhookPort = p
 	}
 
 	// Save config
@@ -151,7 +161,11 @@ func RunInit() error {
 	return nil
 }
 
+// getStateDir reports where state.json actually lives. It delegates to
+// config.HomeDataDir, which honours SIMPLEDEPLOY_STATE_DIR — the previous
+// hard-coded home+"/.simpledeploy" ignored the override, so with it set
+// (notably inside the service container) `init` printed a state path that
+// did not exist.
 func getStateDir() string {
-	home := homeDir()
-	return home + "/.simpledeploy"
+	return cfgpkg.HomeDataDir()
 }

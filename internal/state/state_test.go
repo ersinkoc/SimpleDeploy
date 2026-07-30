@@ -721,3 +721,67 @@ func TestLockStateFile_StaleByAge(t *testing.T) {
 	}
 	unlock()
 }
+
+// TestSaveConfig_CreatesStateDirOnFreshInstall is the regression test for
+// `simpledeploy init` being unable to complete on a machine that had never run
+// it — the first command every user runs.
+//
+// SaveConfig acquires the cross-process lock before saveStateLocked has a
+// chance to MkdirAll, so on a fresh install os.OpenFile(lockPath, O_CREATE...)
+// returned ENOENT. lockStateFile treated any open failure as "the lock is
+// held", span 100 times, and reported "could not acquire state lock after 100
+// retries" — naming a lock file that had never existed.
+//
+// The whole existing suite missed this because every other test points
+// InitState at a t.TempDir(), which always exists. This one deliberately names
+// a directory that does NOT.
+func TestSaveConfig_CreatesStateDirOnFreshInstall(t *testing.T) {
+	fresh := filepath.Join(t.TempDir(), "never", "created", ".simpledeploy")
+	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s must not exist", fresh)
+	}
+	InitState(fresh)
+	t.Cleanup(func() { InitState(t.TempDir()) })
+
+	cfg := &GlobalConfig{
+		BaseDomain:    "apps.example.com",
+		Proxy:         "caddy",
+		AcmeEmail:     "ops@example.com",
+		WebhookPort:   9000,
+		WebhookSecret: "whk_test",
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig on a fresh install must succeed, got: %v", err)
+	}
+
+	got, err := GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig after fresh SaveConfig: %v", err)
+	}
+	if got.BaseDomain != "apps.example.com" || got.WebhookPort != 9000 {
+		t.Errorf("round-tripped config = %+v, want the values just saved", got)
+	}
+
+	// The lock must not be left behind, or the next command blocks for 30s
+	// waiting for it to go stale.
+	if _, err := os.Stat(filepath.Join(fresh, "state.json.lock")); !os.IsNotExist(err) {
+		t.Error("lock file should be released after SaveConfig")
+	}
+}
+
+// TestSaveApp_CreatesStateDirOnFreshInstall covers the same path through the
+// other load-modify-save mutator, since each takes the lock independently.
+func TestSaveApp_CreatesStateDirOnFreshInstall(t *testing.T) {
+	fresh := filepath.Join(t.TempDir(), "absent", ".simpledeploy")
+	InitState(fresh)
+	t.Cleanup(func() { InitState(t.TempDir()) })
+
+	app := NewAppConfig()
+	app.Name = "freshapp"
+	if err := SaveApp(app); err != nil {
+		t.Fatalf("SaveApp on a fresh install must succeed, got: %v", err)
+	}
+	if _, err := GetApp("freshapp"); err != nil {
+		t.Fatalf("GetApp after fresh SaveApp: %v", err)
+	}
+}

@@ -146,13 +146,14 @@ func TestHandleWebhook_Success(t *testing.T) {
 	webhookInitState(t)
 	webhookSaveApp(t, "myapp", "main")
 
-	deployCalled := false
+	// The handler runs on a goroutine the request handler spawns, so the call
+	// has to be reported over a channel. A plain bool written there and read
+	// here is a data race even with a sleep in between — the race detector
+	// fails the test, and without it the read can see a stale value.
+	deployCalled := make(chan string, 1)
 	srv := NewServer(9000, "secret")
 	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
-		deployCalled = true
-		if appName != "myapp" {
-			t.Errorf("Deploy called with %q, want 'myapp'", appName)
-		}
+		deployCalled <- appName
 		return nil
 	})
 
@@ -171,8 +172,12 @@ func TestHandleWebhook_Success(t *testing.T) {
 		t.Errorf("Body should contain 'Deploy triggered', got %q", rec.Body.String())
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	if !deployCalled {
+	select {
+	case got := <-deployCalled:
+		if got != "myapp" {
+			t.Errorf("Deploy called with %q, want 'myapp'", got)
+		}
+	case <-time.After(2 * time.Second):
 		t.Error("Deploy handler should have been called")
 	}
 }
@@ -222,10 +227,10 @@ func TestHandleWebhook_EmptyBranch(t *testing.T) {
 	webhookInitState(t)
 	webhookSaveApp(t, "myapp", "main")
 
-	deployTriggered := false
+	deployTriggered := make(chan struct{}, 1)
 	srv := NewServer(9000, "secret")
 	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
-		deployTriggered = true
+		deployTriggered <- struct{}{}
 		return nil
 	})
 
@@ -243,8 +248,9 @@ func TestHandleWebhook_EmptyBranch(t *testing.T) {
 		t.Errorf("Empty branch should succeed, got %d", rec.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-	if !deployTriggered {
+	select {
+	case <-deployTriggered:
+	case <-time.After(2 * time.Second):
 		t.Error("Deploy handler should have been called for tag push with empty branch")
 	}
 }

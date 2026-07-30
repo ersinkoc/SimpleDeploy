@@ -32,8 +32,14 @@ func TestRateLimiter_WindowIsNotExtendedByTraffic(t *testing.T) {
 
 	const ip = "203.0.113.9"
 
-	if !rl.allow(ip) || !rl.allow(ip) {
-		t.Fatal("first two requests should be allowed")
+	// Consumed in separate statements, not as `!allow(ip) || !allow(ip)`:
+	// allow() mutates the bucket, so the `||` form both hides that from the
+	// reader and short-circuits away the second call whenever the first is
+	// already a failure.
+	for i := 1; i <= 2; i++ {
+		if !rl.allow(ip) {
+			t.Fatalf("request %d of the first two should be allowed", i)
+		}
 	}
 	if rl.allow(ip) {
 		t.Fatal("third request within the window should be limited")

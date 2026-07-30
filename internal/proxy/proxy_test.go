@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -18,10 +19,10 @@ type mockCommandRunner struct {
 	runErr error
 }
 
-func (m *mockCommandRunner) SetDir(string)         {}
-func (m *mockCommandRunner) SetStdout(io.Writer)   {}
-func (m *mockCommandRunner) SetStderr(io.Writer)   {}
-func (m *mockCommandRunner) Run() error            { return m.runErr }
+func (m *mockCommandRunner) SetDir(string)       {}
+func (m *mockCommandRunner) SetStdout(io.Writer) {}
+func (m *mockCommandRunner) SetStderr(io.Writer) {}
+func (m *mockCommandRunner) Run() error          { return m.runErr }
 
 func TestMain(m *testing.M) {
 	code := m.Run()
@@ -77,6 +78,61 @@ func TestAddCaddyApp(t *testing.T) {
 	}
 	if !strings.Contains(content, "X-Custom") {
 		t.Error("Caddyfile should contain custom header")
+	}
+}
+
+// AddCaddyApp walks a map to emit its `header` directives. Go randomises map
+// iteration order per run, so an unsorted walk produced a different Caddyfile
+// on every deploy for an unchanged app — the same defect compose/generator.go
+// fixes with sortedKeys. Enough headers here that a random order would differ
+// from the sorted one with overwhelming probability.
+func TestAddCaddyApp_HeaderOrderIsDeterministic(t *testing.T) {
+	headers := map[string]string{
+		"X-Frame-Options":        "SAMEORIGIN",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"X-XSS-Protection":       "1; mode=block",
+		"Permissions-Policy":     "geolocation=()",
+		"X-Alpha":                "a",
+		"X-Beta":                 "b",
+	}
+
+	render := func() string {
+		t.Helper()
+		dir := setupTestProxyDir(t)
+		caddyfilePath := filepath.Join(dir, "Caddyfile")
+		if err := os.WriteFile(caddyfilePath, []byte("{\n    email test@example.com\n}\n"), 0644); err != nil {
+			t.Fatalf("seed Caddyfile: %v", err)
+		}
+		if err := AddCaddyApp("myapp", "myapp.example.com", 3000, headers); err != nil {
+			t.Fatalf("AddCaddyApp failed: %v", err)
+		}
+		data, err := os.ReadFile(caddyfilePath)
+		if err != nil {
+			t.Fatalf("read Caddyfile: %v", err)
+		}
+		return string(data)
+	}
+
+	want := render()
+	for i := 0; i < 20; i++ {
+		if got := render(); got != want {
+			t.Fatalf("Caddyfile is not deterministic across runs.\nrun 0:\n%s\nrun %d:\n%s", want, i+1, got)
+		}
+	}
+
+	// And the order is actually sorted, not merely stable-by-accident.
+	var seen []string
+	for _, line := range strings.Split(want, "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "header" {
+			seen = append(seen, fields[1])
+		}
+	}
+	if len(seen) != len(headers) {
+		t.Fatalf("emitted %d header directives, want %d", len(seen), len(headers))
+	}
+	if !sort.StringsAreSorted(seen) {
+		t.Errorf("header directives are not in sorted order: %v", seen)
 	}
 }
 
@@ -365,7 +421,7 @@ func TestAddCaddyApp_WithHeaders(t *testing.T) {
 	os.WriteFile(caddyfilePath, []byte("{\n    email test@test.com\n}\n"), 0644)
 
 	headers := map[string]string{
-		"X-Frame-Options":  "DENY",
+		"X-Frame-Options": "DENY",
 		"X-Custom-Header": "value123",
 	}
 	err := AddCaddyApp("hdrapp", "hdrapp.example.com", 3000, headers)
@@ -831,41 +887,43 @@ func TestEscapeCaddyValue_Security(t *testing.T) {
 	}
 }
 
-// TestAddCaddyApp_HeaderInjection tests that AddCaddyApp properly escapes
-// header values to prevent Caddyfile injection attacks.
+// TestAddCaddyApp_HeaderInjection tests that AddCaddyApp rejects header
+// values that could be used for Caddyfile injection. Escaping alone is not
+// enough: `{`/`}` survive escapeCaddyValue, `{...}` is Caddy placeholder
+// syntax even inside quotes, and an unbalanced brace corrupts
+// filterCaddyDomain's block-end counting — so such values are refused
+// outright (mirroring state.ValidateHeaderValue on the Traefik path), and
+// the Caddyfile must be left untouched.
 func TestAddCaddyApp_HeaderInjection(t *testing.T) {
 	setupTestProxyDir(t)
 
 	// Create initial Caddyfile
 	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
-	os.WriteFile(caddyfilePath, []byte("# Initial Caddyfile\n"), 0644)
+	initial := "# Initial Caddyfile\n"
+	os.WriteFile(caddyfilePath, []byte(initial), 0644)
 
-	// Try to inject via header value
-	maliciousHeaders := map[string]string{
-		"X-Custom": `value"} malicious_directive "another`,
+	maliciousValues := []string{
+		`value"} malicious_directive "another`, // quote + unbalanced brace
+		"{http.request.header.Cookie}",         // Caddy placeholder
+		"multi\nline",                          // newline
+		`back\slash`,                           // backslash
 	}
 
-	err := AddCaddyApp("testapp", "test.example.com", 3000, maliciousHeaders)
-	if err != nil {
-		t.Fatalf("AddCaddyApp failed: %v", err)
+	for _, v := range maliciousValues {
+		err := AddCaddyApp("testapp", "test.example.com", 3000,
+			map[string]string{"X-Custom": v})
+		if err == nil {
+			t.Errorf("AddCaddyApp should reject header value %q", v)
+		}
 	}
 
-	// Read the Caddyfile
+	// The file must not have been touched by any of the rejected calls.
 	data, err := os.ReadFile(caddyfilePath)
 	if err != nil {
 		t.Fatalf("Failed to read Caddyfile: %v", err)
 	}
-
-	content := string(data)
-
-	// Verify the malicious content was escaped
-	if strings.Contains(content, `"} malicious_directive "another`) {
-		t.Error("Malicious header value was not properly escaped")
-	}
-
-	// Verify the escaped version is present
-	if !strings.Contains(content, `\"} malicious_directive \"another`) {
-		t.Error("Escaped header value not found in Caddyfile")
+	if string(data) != initial {
+		t.Errorf("Caddyfile was modified despite rejected headers:\n%s", data)
 	}
 }
 
@@ -1022,41 +1080,152 @@ func TestAddCaddyApp_DedupPreservesOtherDomains(t *testing.T) {
 	}
 }
 
-// TestAtomicWriteFile_BasicWrite covers the happy path: data lands in the
+// TestWriteCaddyfile_BasicWrite covers the happy path: data lands in the
 // destination file and no .tmp file is left behind.
-func TestAtomicWriteFile_BasicWrite(t *testing.T) {
+func TestWriteCaddyfile_BasicWrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 
-	if err := atomicWriteFile(path, []byte("hello"), 0644); err != nil {
-		t.Fatalf("atomicWriteFile failed: %v", err)
+	if err := writeCaddyfile(path, []byte("hello"), 0644); err != nil {
+		t.Fatalf("writeCaddyfile failed: %v", err)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadFile after atomicWriteFile failed: %v", err)
+		t.Fatalf("ReadFile after writeCaddyfile failed: %v", err)
 	}
 	if string(data) != "hello" {
 		t.Errorf("got %q, want \"hello\"", string(data))
 	}
 
-	// .tmp file must not be left behind on success
+	// No sibling temp file: the write is in place, so none is ever created.
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf(".tmp file should not exist after successful rename, got err=%v", err)
+		t.Errorf("no .tmp sibling should exist, got err=%v", err)
 	}
 }
 
-// TestAtomicWriteFile_OverwritesExisting verifies that a second call replaces
+// TestWriteCaddyfile_PreservesInode is the regression test for Caddy mode not
+// routing anything at all.
+//
+// The generated Caddy compose bind-mounts the Caddyfile as a single FILE
+// (./Caddyfile:/etc/caddy/Caddyfile). Docker resolves that to an inode once, at
+// container creation. The previous write-to-temp-then-rename implementation
+// swapped in a new inode on every write, so the running Caddy stayed bound to
+// the original — orphaned — inode and never saw a single update. `init` wrote
+// the global block, started Caddy, then the first atomic write (the /_qd
+// webhook route) broke the mount; every AddCaddyApp afterwards was invisible.
+// Caddy ended up with no site blocks, did not listen on :80/:443 at all, and
+// `caddy reload` cheerfully reported "config is unchanged".
+//
+// Skipped on Windows: os.SameFile is the portable identity check, but Windows
+// does not expose stable inode semantics for this scenario.
+func TestWriteCaddyfile_PreservesInode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inode identity is not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Caddyfile")
+
+	if err := writeCaddyfile(path, []byte("{\n    email a@b.com\n}\n"), 0644); err != nil {
+		t.Fatalf("initial writeCaddyfile failed: %v", err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	// Two more writes — a bind-mounted container must see both.
+	for i, content := range []string{"first update\n", "second update\n"} {
+		if err := writeCaddyfile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("writeCaddyfile #%d failed: %v", i, err)
+		}
+		after, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat #%d failed: %v", i, err)
+		}
+		if !os.SameFile(before, after) {
+			t.Fatalf("write #%d replaced the file's inode — a single-file bind mount would go stale and Caddy would never see this config", i)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile #%d failed: %v", i, err)
+		}
+		if string(got) != content {
+			t.Errorf("write #%d: got %q, want %q", i, got, content)
+		}
+	}
+}
+
+// TestAddCaddyApp_PreservesInode exercises the same property through the real
+// call path an operator hits: init writes the stub, then every deploy appends a
+// site block. All of them must land on the same inode.
+func TestAddCaddyApp_PreservesInode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("inode identity is not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	oldProxyDir := ProxyDir
+	ProxyDir = dir
+	defer func() { ProxyDir = oldProxyDir }()
+
+	caddyfile := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(caddyfile, []byte("{\n    email a@b.com\n}\n"), 0644); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	// This is the inode the container binds at `docker compose up -d`.
+	mounted, err := os.Stat(caddyfile)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	if err := setupCaddyWebhookRoute("apps.example.com", 9000); err != nil {
+		t.Fatalf("setupCaddyWebhookRoute failed: %v", err)
+	}
+	if err := AddCaddyApp("one", "one.apps.example.com", 3000, map[string]string{"X-Frame-Options": "SAMEORIGIN"}); err != nil {
+		t.Fatalf("AddCaddyApp failed: %v", err)
+	}
+	if err := AddCaddyApp("two", "two.apps.example.com", 8080, nil); err != nil {
+		t.Fatalf("AddCaddyApp failed: %v", err)
+	}
+	if err := RemoveCaddyApp("one.apps.example.com"); err != nil {
+		t.Fatalf("RemoveCaddyApp failed: %v", err)
+	}
+
+	final, err := os.Stat(caddyfile)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if !os.SameFile(mounted, final) {
+		t.Fatal("Caddyfile inode changed across the init/deploy/remove sequence — the container's bind mount would be stale and no app would be routed")
+	}
+
+	data, err := os.ReadFile(caddyfile)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "two.apps.example.com {") {
+		t.Errorf("remaining app block missing from Caddyfile:\n%s", content)
+	}
+	if strings.Contains(content, "one.apps.example.com {") {
+		t.Errorf("removed app block still present:\n%s", content)
+	}
+	if !strings.Contains(content, "reverse_proxy host.docker.internal:9000") {
+		t.Errorf("webhook route missing from Caddyfile:\n%s", content)
+	}
+}
+
+// TestWriteCaddyfile_OverwritesExisting verifies that a second call replaces
 // the existing file contents (this is the redeploy / Caddyfile-edit scenario).
-func TestAtomicWriteFile_OverwritesExisting(t *testing.T) {
+func TestWriteCaddyfile_OverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
 
 	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
 		t.Fatalf("setup WriteFile failed: %v", err)
 	}
-	if err := atomicWriteFile(path, []byte("new"), 0644); err != nil {
-		t.Fatalf("atomicWriteFile failed: %v", err)
+	if err := writeCaddyfile(path, []byte("new"), 0644); err != nil {
+		t.Fatalf("writeCaddyfile failed: %v", err)
 	}
 
 	data, err := os.ReadFile(path)

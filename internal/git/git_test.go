@@ -2,9 +2,11 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -372,5 +374,68 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("git %v failed: %v", args, err)
+	}
+}
+
+// TestWriteAskpassScript_IsExecutable is a regression test for private-repo
+// deploys being broken outright.
+//
+// writeAskpassScript passed 0700 to os.WriteFile, but os.WriteFile only honours
+// its perm argument when it CREATES the file — os.CreateTemp had already made
+// it at 0600. Git therefore could not exec the helper:
+//
+//	fatal: cannot exec '/tmp/qd-askpass-...': Permission denied
+//	fatal: could not read Username for 'https://github.com': terminal prompts disabled
+//
+// which failed every clone and pull of a private repository, including
+// unattended webhook redeploys. Verified against real git on Linux: the same
+// script at 0700 authenticates normally.
+//
+// Skipped on Windows, where Go's FileMode does not reflect ACLs and there is no
+// execute bit.
+func TestWriteAskpassScript_IsExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX execute bit on Windows")
+	}
+	path, cleanup, err := writeAskpassScript("tok")
+	if err != nil {
+		t.Fatalf("writeAskpassScript failed: %v", err)
+	}
+	defer cleanup()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm&0100 == 0 {
+		t.Errorf("askpass script mode = %#o, want owner-executable — git cannot exec it otherwise", perm)
+	}
+	// Owner-only: the script itself carries no secret (the token arrives via
+	// QD_GIT_TOKEN in the environment), but keep it off-limits to other users.
+	if perm := info.Mode().Perm(); perm&0077 != 0 {
+		t.Errorf("askpass script mode = %#o, want owner-only", perm)
+	}
+}
+
+// TestWriteAskpassScript_ChmodError covers the failure branch of the chmod
+// added alongside the fix above: the temp file must not be left behind.
+func TestWriteAskpassScript_ChmodError(t *testing.T) {
+	var chmodded string
+	origChmod := osChmod
+	osChmod = func(name string, mode os.FileMode) error {
+		chmodded = name
+		return errors.New("chmod boom")
+	}
+	defer func() { osChmod = origChmod }()
+
+	_, _, err := writeAskpassScript("token")
+	if err == nil {
+		t.Fatal("writeAskpassScript should fail when chmod fails")
+	}
+	if chmodded == "" {
+		t.Fatal("chmod was never attempted")
+	}
+	if _, statErr := os.Stat(chmodded); !os.IsNotExist(statErr) {
+		t.Errorf("temp script %s should have been removed after chmod failure", chmodded)
 	}
 }

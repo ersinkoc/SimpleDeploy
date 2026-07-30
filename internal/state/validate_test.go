@@ -617,3 +617,29 @@ func TestValidateHeaderValue_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateHeaderValue_RejectsBraces is a regression test for two distinct
+// Caddy problems a brace in a header value causes:
+//
+//   - `{...}` is Caddy's placeholder syntax and is expanded inside quoted
+//     strings too, so the value sent on the wire is not the one configured.
+//   - proxy.filterCaddyDomain locates the end of a site block by counting `{`
+//     against `}`. An unbalanced brace desynchronises that count, so removing
+//     or replacing the block — which AddCaddyApp does on every deploy —
+//     swallows the remainder of the Caddyfile and every other app's routing
+//     with it.
+func TestValidateHeaderValue_RejectsBraces(t *testing.T) {
+	values := []string{
+		"{host}",
+		"unbalanced {",
+		"unbalanced }",
+		`{"group":"csp"}`,
+	}
+	for _, v := range values {
+		t.Run(v, func(t *testing.T) {
+			if err := ValidateHeaderValue(v); err == nil {
+				t.Errorf("ValidateHeaderValue(%q) should fail: braces are Caddy placeholders and break block parsing", v)
+			}
+		})
+	}
+}

@@ -157,10 +157,21 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 			containerName, status, appName))
 	}
 
-	// Reload Caddy if applicable. Not fatal — the app is already serving; a
-	// stale proxy config only matters if the route changed, which redeploy
-	// does not do.
+	// Re-assert the app's Caddy route, then reload. Not fatal — the container
+	// is already up, and a proxy problem must not undo a successful build.
+	//
+	// AddCaddyApp is called here, not just ReloadCaddy, because the route can
+	// legitimately be missing at this point: deploy only WARNS when AddCaddyApp
+	// fails, so an app can be recorded as running with no Caddyfile block at
+	// all, and the Caddyfile is a plain text file an operator may have edited or
+	// restored. Reloading alone would then re-read a config that still does not
+	// route the app, leaving it unreachable with no error anywhere. AddCaddyApp
+	// strips an existing block for the same domain before appending, so calling
+	// it on every redeploy is idempotent.
 	if cfg.Proxy == "caddy" {
+		if err := proxyAddCaddyApp(app.Name, app.Domain, app.Port, app.Headers); err != nil {
+			wizard.Warn("Failed to update Caddyfile: " + err.Error())
+		}
 		if err := proxyReloadCaddy(); err != nil {
 			wizard.Warn("Failed to reload Caddy: " + err.Error())
 		}

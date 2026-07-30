@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,25 +56,60 @@ var (
 	}
 )
 
-// atomicWriteFile writes data to a sibling temp file then renames it over
-// the destination. On both POSIX and Windows os.Rename is atomic when
-// source and destination are on the same filesystem, so a partial /
-// interrupted write can never leave a half-written Caddyfile in place
-// (which would either crash Caddy on reload or, worse, accept a malformed
-// routing config). The temp file uses the same parent directory to keep
-// the rename intra-fs.
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+// writeCaddyfile overwrites the Caddyfile IN PLACE, deliberately preserving
+// the file's inode.
+//
+// It must not write-to-temp-then-rename, which is what it used to do. The
+// generated Caddy compose bind-mounts the Caddyfile as a SINGLE FILE
+// (./Caddyfile:/etc/caddy/Caddyfile). Docker resolves such a mount to an inode
+// once, at container creation. A rename replaces the directory entry with a new
+// inode, so the running container stays bound to the old one — which no longer
+// has a name — and never sees another byte we write.
+//
+// The effect was that Caddy mode did not route anything at all. `init` wrote the
+// global block, started the container, and then the very first atomic write
+// (the /_qd webhook route) orphaned the mount. Every AddCaddyApp after that was
+// invisible: the host Caddyfile grew correct site blocks while the container
+// kept reading the original 3-line stub, so `caddy reload` reported
+// "config is unchanged" and succeeded, Caddy had no site blocks and therefore
+// did not even listen on :80/:443, and `deploy` still printed
+// "https://<app> is ready!". Confirmed by inode comparison: host 20 lines,
+// container 3 lines, different inodes.
+//
+// Losing rename atomicity is acceptable here, and much cheaper than the bug it
+// caused: nothing reads this file except `caddy reload`, which we invoke
+// ourselves after the write returns, and Caddy validates the config while
+// adapting it — a truncated or malformed Caddyfile makes the reload fail and
+// leaves the previously loaded config running, which the callers already
+// surface as a warning.
+//
+// Sync before returning so the bytes are on disk before we ask Caddy to
+// re-read them.
+func writeCaddyfile(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		// Best-effort cleanup — leaving the .tmp behind is safer than
-		// returning the rename error and pretending nothing happened.
-		_ = os.Remove(tmpPath)
+	if _, err := f.Write(data); err != nil {
+		f.Close()
 		return err
 	}
-	return nil
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// sortedHeaderKeys returns a header map's keys in lexical order so Caddyfile
+// emission is a pure function of its input. Mirrors compose.sortedKeys.
+func sortedHeaderKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // filterCaddyDomain returns the input Caddyfile content with the block for
@@ -188,13 +224,22 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 
 	// Validate every header before touching the file so a partially-valid
 	// header map cannot leave the Caddyfile half-rewritten on the disk.
-	for key := range headers {
+	for key, val := range headers {
 		// Header NAMES are interpolated raw into the Caddyfile; a key with
 		// `\n}` or whitespace would let an attacker break out of the block
 		// and inject directives. Validate here in addition to escapeCaddyValue
 		// (which only protects the value side).
 		if err := state.ValidateHeaderName(key); err != nil {
 			return fmt.Errorf("invalid header name in app %q: %w", appName, err)
+		}
+		// Values must be validated too, not just escaped: escapeCaddyValue
+		// keeps `{` and `}` intact, but `{...}` is Caddy placeholder syntax
+		// (expanded even inside quotes) and filterCaddyDomain counts braces to
+		// find a block's end — an unbalanced brace in a value makes the next
+		// rewrite swallow the rest of the Caddyfile. Same check the Traefik
+		// path applies in compose.Generate.
+		if err := state.ValidateHeaderValue(val); err != nil {
+			return fmt.Errorf("invalid header value for %q in app %q: %w", key, appName, err)
 		}
 	}
 
@@ -212,14 +257,20 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 	}
 	b.WriteString(fmt.Sprintf("\n%s {\n", domain))
 	b.WriteString(fmt.Sprintf("    reverse_proxy qd-%s:%d\n", appName, port))
-	for key, val := range headers {
+	// Sorted, for the same reason compose/generator.go sorts every map it
+	// walks: Go randomises map iteration order per run, so an unsorted walk
+	// emitted the header directives in a different order on every deploy. The
+	// Caddyfile is rewritten and reloaded on each one, which turned a no-op
+	// redeploy into a config change — unreviewable diffs, and a proxy reload
+	// that cannot be distinguished from a real one.
+	for _, key := range sortedHeaderKeys(headers) {
 		// Escape the value to prevent Caddyfile injection
-		escapedVal := escapeCaddyValue(val)
+		escapedVal := escapeCaddyValue(headers[key])
 		b.WriteString(fmt.Sprintf("    header %s \"%s\"\n", key, escapedVal))
 	}
 	b.WriteString("}\n")
 
-	return atomicWriteFile(caddyfilePath, []byte(b.String()), 0644)
+	return writeCaddyfile(caddyfilePath, []byte(b.String()), 0644)
 }
 
 func RemoveCaddyApp(domain string) error {
@@ -230,7 +281,7 @@ func RemoveCaddyApp(domain string) error {
 	}
 
 	filtered := filterCaddyDomain(string(data), domain)
-	return atomicWriteFile(caddyfilePath, []byte(filtered), 0644)
+	return writeCaddyfile(caddyfilePath, []byte(filtered), 0644)
 }
 
 func ReloadCaddy() error {
@@ -313,5 +364,5 @@ func setupCaddyWebhookRoute(baseDomain string, webhookPort int) error {
 	b.WriteString("    handle {\n        respond \"Not Found\" 404\n    }\n")
 	b.WriteString("}\n")
 
-	return atomicWriteFile(caddyfilePath, []byte(b.String()), 0644)
+	return writeCaddyfile(caddyfilePath, []byte(b.String()), 0644)
 }

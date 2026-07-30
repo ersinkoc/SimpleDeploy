@@ -107,10 +107,25 @@ func TestVerifyGiteaSignature(t *testing.T) {
 	body := []byte("test")
 	mac := hmac.New(sha256.New, []byte("secret"))
 	mac.Write(body)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	digest := hex.EncodeToString(mac.Sum(nil))
 
-	if !VerifyGiteaSignature(body, sig, "secret") {
-		t.Error("Gitea signature verification should work same as GitHub")
+	// Gitea's X-Gitea-Signature carries the BARE hex digest — no "sha256="
+	// prefix. This is the format a real Gitea instance sends.
+	if !VerifyGiteaSignature(body, digest, "secret") {
+		t.Error("Gitea signature verification should accept the bare hex digest Gitea actually sends")
+	}
+	// The prefixed GitHub form is tolerated as well.
+	if !VerifyGiteaSignature(body, "sha256="+digest, "secret") {
+		t.Error("Gitea signature verification should tolerate a sha256= prefix")
+	}
+	if VerifyGiteaSignature(body, digest, "wrong-secret") {
+		t.Error("Gitea signature verification should reject a digest made with the wrong secret")
+	}
+	if VerifyGiteaSignature(body, "", "secret") {
+		t.Error("Gitea signature verification should reject an empty signature")
+	}
+	if VerifyGiteaSignature(body, "not-hex", "secret") {
+		t.Error("Gitea signature verification should reject non-hex input")
 	}
 }
 
@@ -167,6 +182,9 @@ func TestServer_StartAndHealthCheck(t *testing.T) {
 	ln.Close()
 
 	srv := NewServer(port, "test-secret")
+	// Start() never returns here, so its shutdown path never runs and the
+	// limiter's ticker goroutine would outlive the test.
+	defer srv.limiter.stop()
 
 	done := make(chan error, 1)
 	go func() {
@@ -475,7 +493,9 @@ func TestWebhook_GiteaValid(t *testing.T) {
 	body := []byte(`{"ref":"refs/heads/main"}`)
 	mac := hmac.New(sha256.New, []byte("gitea-secret"))
 	mac.Write(body)
-	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	// Bare hex, no "sha256=" prefix — the format Gitea actually sends in
+	// X-Gitea-Signature.
+	sig := hex.EncodeToString(mac.Sum(nil))
 
 	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/giteaapp", strings.NewReader(string(body)))
 	req.Header.Set("X-Gitea-Signature", sig)

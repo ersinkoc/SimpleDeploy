@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -120,6 +121,32 @@ func ContainerStatus(ctx context.Context, containerName string) (string, error) 
 		return "", fmt.Errorf("failed to get container status: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// ContainerRestartCount reports how many times Docker has restarted the
+// container since it was created.
+//
+// This is the signal that distinguishes a crash-looping container from a
+// healthy one. Every app service is generated with `restart: unless-stopped`,
+// so a container whose process dies is put straight back into "restarting" and
+// then briefly "running" — it never settles in "exited" or "dead". Status alone
+// therefore cannot tell the two apart, and the restart counter is what survives
+// between those flickers.
+func ContainerRestartCount(ctx context.Context, containerName string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+
+	cmd := newDockerCmdContext(ctx, "docker", "inspect", "-f", "{{.RestartCount}}", containerName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get restart count for %s: %w", containerName, err)
+	}
+	raw := strings.TrimSpace(string(output))
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("unexpected restart count %q for %s: %w", raw, containerName, err)
+	}
+	return n, nil
 }
 
 func ContainerExists(ctx context.Context, containerName string) bool {

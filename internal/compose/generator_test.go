@@ -49,7 +49,9 @@ func TestGenerateBasic(t *testing.T) {
 	if !strings.Contains(yaml, "Host(`myapp.example.com`)") {
 		t.Error("Should contain domain rule")
 	}
-	if !strings.Contains(yaml, `KEY="value"`) {
+	// Map form. The list form (`- KEY="value"`) shipped the quotes to the
+	// container as literal characters — see TestGenerate_EnvUsesYAMLMapForm.
+	if !strings.Contains(yaml, `KEY: "value"`) {
 		t.Error("Should contain environment variable")
 	}
 	if !strings.Contains(yaml, "X-Custom=yes") {
@@ -340,7 +342,9 @@ func TestGenerate_MultipleEnvVars(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 	for k, v := range data.Environment {
-		expected := k + "=\"" + v + "\""
+		// YAML map form — see TestGenerate_EnvUsesYAMLMapForm for why the
+		// previous list form (`- KEY="value"`) was wrong.
+		expected := k + ": \"" + v + "\""
 		if !strings.Contains(yaml, expected) {
 			t.Errorf("Should contain env var %s", expected)
 		}
@@ -548,5 +552,43 @@ func TestGenerate_YAMLInjectionProtection(t *testing.T) {
 	_, err := Generate(data)
 	if err != nil {
 		t.Errorf("Generate should escape YAML injection sequences, not reject: %v", err)
+	}
+}
+
+// TestGenerate_EnvUsesYAMLMapForm locks in the app service's `environment:`
+// block being emitted as a YAML MAP, not a list.
+//
+// Regression test. The list form `- KEY="value"` makes the entire item one
+// plain YAML scalar, so the quotes are literal characters rather than YAML
+// syntax; Compose splits on the first "=" and does no unquoting, so the
+// container received DATABASE_URL with surrounding double quotes and no driver
+// could parse it. Verified end-to-end against docker compose v5.3.1 before the
+// fix: `echo $DATABASE_URL` printed "postgresql://..." including the quotes.
+//
+// The database services below the app service always used map form, which is
+// why only the app's own variables were affected.
+func TestGenerate_EnvUsesYAMLMapForm(t *testing.T) {
+	data := &ComposeData{
+		AppName: "myapp", Image: "myapp:latest", Port: 3000,
+		Domain: "myapp.example.com", ProxyType: "caddy",
+		Environment: map[string]string{
+			"DATABASE_URL": "postgresql://postgres:pw@qd-myapp-postgresql:5432/myapp",
+			"NODE_ENV":     "production",
+		},
+	}
+	yaml, err := Generate(data)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if !strings.Contains(yaml, `      NODE_ENV: "production"`) {
+		t.Errorf("env must be emitted as a YAML map entry; got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, `      DATABASE_URL: "postgresql://postgres:pw@qd-myapp-postgresql:5432/myapp"`) {
+		t.Errorf("connection string must be emitted as a YAML map entry; got:\n%s", yaml)
+	}
+	// The exact shape that caused the bug must not come back.
+	if strings.Contains(yaml, `- NODE_ENV=`) || strings.Contains(yaml, `- DATABASE_URL=`) {
+		t.Errorf("env must not use the list form (quotes become literal); got:\n%s", yaml)
 	}
 }

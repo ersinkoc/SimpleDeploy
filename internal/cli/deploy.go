@@ -410,24 +410,60 @@ func RunDeploy() error {
 // operator is still watching.
 const containerStartTimeout = 30 * time.Second
 
+// statusCrashLooping is a synthetic state — Docker never reports it. It means
+// the container keeps dying and being restarted by its `restart: unless-stopped`
+// policy, which is a definitive deploy failure even though the container is
+// technically "up" at any given instant.
+const statusCrashLooping = "crash-looping"
+
+// containerStableFor is how long a container must hold "running", without its
+// restart counter moving, before we believe it.
+//
+// A crash-looping container is "running" for a fraction of every restart cycle,
+// so a single observation is not evidence of anything. Five seconds is long
+// enough to span a restart cycle (Docker backs off starting at 100 ms) and
+// short enough to be lost in the noise of a deploy that just spent a minute
+// building an image. A var so tests can drop it to zero.
+var containerStableFor = 5 * time.Second
+
 // Container states that mean "this is not coming up" — a container that ran
-// its entrypoint and stopped, or one the daemon considers unrecoverable.
-// Distinguished from transient states ("created", "restarting", "paused")
-// which are worth polling through, and from "not found"/lookup errors which
-// mean we could not determine anything at all.
+// its entrypoint and stopped, one the daemon considers unrecoverable, or one
+// caught in a restart loop. Distinguished from genuinely transient states
+// ("created", "paused") which are worth polling through, and from
+// "not found"/lookup errors which mean we could not determine anything at all.
 func isFailedContainerState(status string) bool {
-	return status == "exited" || status == "dead"
+	return status == "exited" || status == "dead" || status == statusCrashLooping
 }
 
-// waitForContainer polls a container's state until it is "running", reaches a
-// terminal failure state, or the budget expires. It returns the last state
+// waitForContainer polls a container until it is convincingly running, reaches
+// a terminal failure state, or the budget expires. It returns the last state
 // observed, or "unknown" if the state could never be read.
 //
-// Replaces a single check after a fixed 2 s sleep, which reported "created"
-// for any image whose entrypoint had not finished starting and so flagged
-// perfectly healthy deploys as broken.
+// "Convincingly" is the important part, and is why this does more than read
+// .State.Status. Every app service is generated with `restart: unless-stopped`,
+// so a container that crashes on startup is immediately restarted: it cycles
+// through "restarting" and briefly "running" and NEVER settles in "exited" or
+// "dead". The previous implementation returned success on the first "running" it
+// saw, so a deploy that shipped an image crashing on boot was reported as
+// "redeployed successfully!", `list` showed it green, and the rollback that
+// exists for exactly this case never fired — while the site served 502.
+// Verified end-to-end: RestartCount climbing, status flipping between
+// "restarting" and "running", HTTP 502, and a success message.
+//
+// Two things fix that. The restart counter is checked on every poll — it is the
+// signal that persists between the flickers — and "running" must hold for
+// containerStableFor before it is believed.
 func waitForContainer(ctx context.Context, containerName string, budget time.Duration) string {
 	deadline := time.Now().Add(budget)
+
+	// Restart count when we started looking, NOT zero. `docker compose up -d`
+	// normally recreates the container (the image tag always changes on
+	// redeploy) so this is 0 in practice — but if compose ever decides the
+	// service is up to date and leaves an old container in place, its historical
+	// restarts must not be misread as a fresh crash loop. Only growth counts.
+	baseline := -1
+	runningSince := time.Time{}
+
 	for {
 		status, err := dockerContainerStatus(ctx, containerName)
 		switch {
@@ -436,8 +472,6 @@ func waitForContainer(ctx context.Context, containerName string, budget time.Dur
 			// not block the deploy on it — report "unknown" so the caller
 			// treats the result as unverified rather than as a failure.
 			return "unknown"
-		case status == "running":
-			return status
 		case status == "not found":
 			// compose up reported success, so the container should exist. It
 			// does not — nothing to poll for.
@@ -445,13 +479,49 @@ func waitForContainer(ctx context.Context, containerName string, budget time.Dur
 		case isFailedContainerState(status):
 			return status
 		}
+
+		// A restart we did not ask for means the container already died once.
+		// Errors are ignored deliberately: an older Docker or a mocked status
+		// source that cannot supply the counter must degrade to the previous
+		// status-only behaviour rather than fail the deploy.
+		if restarts, rerr := dockerContainerRestarts(ctx, containerName); rerr == nil {
+			if baseline < 0 {
+				baseline = restarts
+			}
+			if restarts > baseline {
+				return statusCrashLooping
+			}
+		}
+
+		if status == "running" {
+			if runningSince.IsZero() {
+				runningSince = time.Now()
+			}
+			if time.Since(runningSince) >= containerStableFor {
+				return status
+			}
+		} else {
+			// Dropped out of running — start the stability clock over.
+			runningSince = time.Time{}
+		}
+
 		if time.Now().After(deadline) {
+			// Out of budget. Report "running" only if that is genuinely where
+			// it ended up; the caller treats anything else as unverified.
 			return status
 		}
 		time.Sleep(time.Second)
 	}
 }
 
+// mapDetectedDefault turns a buildpack.Detect result into the 1-based index of
+// the matching entry in the appTypes menu above. Every type Detect can return
+// must appear here: an unmapped one falls through to 7 ("Dockerfile (use
+// existing)"), and accepting that default skips Dockerfile generation entirely
+// — so the build then fails with "Dockerfile not found" on a repository that
+// never had one. Ruby and Static were missing, which broke exactly those two
+// detections, and Static is also what Detect returns when it recognises
+// nothing at all.
 func mapDetectedDefault(appType string) int {
 	switch appType {
 	case buildpack.TypeNode:
@@ -462,6 +532,10 @@ func mapDetectedDefault(appType string) int {
 		return 3
 	case buildpack.TypePython:
 		return 4
+	case buildpack.TypeRuby:
+		return 5
+	case buildpack.TypeStatic:
+		return 6
 	case buildpack.TypeDocker:
 		return 7
 	default:
@@ -665,7 +739,9 @@ func sanitizeDefaultName(name string) string {
 	name = sanitizeNameRe.ReplaceAllString(name, "-")
 	name = strings.Trim(name, "-")
 	if len(name) > 63 {
-		name = name[:63]
+		// Re-trim after truncation: the cut can land on a '-', and
+		// ValidateAppName rejects names that end with one.
+		name = strings.Trim(name[:63], "-")
 	}
 	if name == "" {
 		name = "app"

@@ -68,6 +68,20 @@ var (
 func lockStateFile() (unlock func(), err error) {
 	lockPath := getStatePath() + ".lock"
 
+	// Create the state directory before opening the lock file in it.
+	//
+	// On a fresh install nothing has created ~/.simpledeploy yet: `init` calls
+	// SaveConfig as its first write, and SaveConfig takes this lock BEFORE
+	// saveStateLocked gets a chance to MkdirAll. The O_CREATE below then failed
+	// with ENOENT, which the retry loop misread as "someone else holds the
+	// lock" — so every fresh `simpledeploy init` spun for a second and died
+	// with "could not acquire state lock after 100 retries", naming a lock that
+	// had never existed. Tests missed it because they all point InitState at a
+	// t.TempDir() that already exists.
+	if err := osMkdirAll(filepath.Dir(lockPath), 0700); err != nil {
+		return nil, fmt.Errorf("failed to create state directory: %w", err)
+	}
+
 	for retries := 0; retries < 100; retries++ {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
@@ -76,6 +90,15 @@ func lockStateFile() (unlock func(), err error) {
 			return func() {
 				os.Remove(lockPath)
 			}, nil
+		}
+
+		// Only an already-present lock file is worth waiting on. Anything else
+		// (permission denied, read-only filesystem, a path component that is
+		// not a directory) is permanent, and retrying it for a second before
+		// reporting a generic "could not acquire lock" buries the real cause —
+		// which is exactly how the missing-directory bug above stayed hidden.
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("failed to create state lock %s: %w", lockPath, err)
 		}
 
 		// Lock file exists, check if stale based on file age

@@ -83,7 +83,7 @@ simpledeploy version             # Show version
 
 1. **`init`** — checks Docker **and the Compose plugin**, starts Traefik or Caddy on the `simpledeploy` network, requests Let's Encrypt certs, and publishes the webhook endpoint at `https://<base-domain>/_qd/`.
 2. **`deploy`** — clones the repo, detects the framework, generates a Dockerfile + `.dockerignore` if the repo has none, builds an image, writes a `docker-compose.yml`, starts the container behind the proxy, and polls until it reports `running`.
-3. **Webhook** — verifies the push signature, pulls the latest commit, rebuilds, restarts, and **rolls back to the previous image** if the new container exits.
+3. **Webhook** — verifies the push signature, pulls the latest commit, rebuilds, restarts, and **rolls back to the previous image** if the new container fails to come up — including a container that crash-loops under its `restart: unless-stopped` policy rather than exiting outright.
 
 A failed or cancelled deploy removes the app directory it created, so nothing is left holding generated database credentials.
 
@@ -258,7 +258,7 @@ docker build -t simpledeploy:latest .
 - App containers use `expose`, not `ports` — not reachable except through the proxy.
 - Input validation at every boundary that reaches a config file: domains, emails, header names and values, env keys, image tags, volume names, container paths.
 - `.env` and generated compose files are mode 0600; generated `.dockerignore` keeps `.git` out of built images.
-- Atomic proxy config writes — a partial write cannot leave a broken Caddyfile in place.
+- Proxy config is written in place so the container's single-file bind mount stays valid; Caddy validates the config on reload and keeps the previous one if the new file is malformed.
 
 ## Changelog
 

@@ -157,6 +157,27 @@ func Generate(data *ComposeData) (string, error) {
 
 	if len(data.Environment) > 0 {
 		b.WriteString("    environment:\n")
+		// MAP form ("KEY: \"value\""), not list form ("- KEY=\"value\"").
+		//
+		// This is load-bearing, not style. In list form the whole item is a
+		// single YAML plain scalar, so the quotes yamlQuote adds are NOT YAML
+		// syntax — they are literal characters inside the value. Compose splits
+		// the item on the first "=" and does no unquoting, so the container
+		// received DATABASE_URL as
+		//     "postgresql://postgres:pw@qd-app-postgresql:5432/app"
+		// with the double quotes included, which no database driver can parse.
+		// Every generated variable was affected (DATABASE_URL, REDIS_URL,
+		// MONGODB_URI, <TYPE>_URL) as well as every operator-supplied one —
+		// NODE_ENV arrived as "production" rather than production.
+		//
+		// It could not be worked around via the .env file either: `environment`
+		// takes precedence over `env_file`, so the correct unquoted value in
+		// .env was shadowed by the broken quoted one.
+		//
+		// In map form the quotes are real YAML quoting and are stripped by the
+		// parser, which is why the database services below have always been
+		// correct — they used map form all along.
+		//
 		// Sorted: Go map iteration order is randomised per run, so an unsorted
 		// walk produced a different docker-compose.yml on every redeploy even
 		// when nothing changed — noisy diffs, and `docker compose up` seeing a
@@ -170,7 +191,7 @@ func Generate(data *ComposeData) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("invalid environment variable %s: %w", key, err)
 			}
-			b.WriteString(fmt.Sprintf("      - %s=%s\n", key, quoted))
+			b.WriteString(fmt.Sprintf("      %s: %s\n", key, quoted))
 		}
 	}
 

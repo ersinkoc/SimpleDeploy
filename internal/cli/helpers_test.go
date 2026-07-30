@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -34,6 +35,8 @@ func TestMapDetectedDefault(t *testing.T) {
 		{buildpack.TypeGo, 2},
 		{buildpack.TypePHP, 3},
 		{buildpack.TypePython, 4},
+		{buildpack.TypeRuby, 5},
+		{buildpack.TypeStatic, 6},
 		{buildpack.TypeDocker, 7},
 		{"unknown", 7},
 		{"", 7},
@@ -46,6 +49,49 @@ func TestMapDetectedDefault(t *testing.T) {
 				t.Errorf("mapDetectedDefault(%q) = %d, want %d", tt.appType, got, tt.want)
 			}
 		})
+	}
+}
+
+// dockerfileMenuIndex is the position of "Dockerfile (use existing)" in the
+// application-type menu RunDeploy presents.
+const dockerfileMenuIndex = 7
+
+// Accepting the wizard's default must never select "Dockerfile (use existing)"
+// for a repository that was detected as something else: that choice skips
+// Dockerfile generation, so the deploy then fails at `docker build` with
+// "Dockerfile not found". Ruby and Static were both unmapped and fell through
+// to the Dockerfile entry — and Static is also what Detect returns when it
+// recognises nothing at all, so the fall-through hit the no-Dockerfile case
+// most likely to need a generated one.
+func TestMapDetectedDefault_NonDockerTypesNeverDefaultToDockerfile(t *testing.T) {
+	detectable := []string{
+		buildpack.TypeNode,
+		buildpack.TypeGo,
+		buildpack.TypePHP,
+		buildpack.TypePython,
+		buildpack.TypeRuby,
+		buildpack.TypeStatic,
+	}
+	for _, appType := range detectable {
+		t.Run(appType, func(t *testing.T) {
+			if got := mapDetectedDefault(appType); got == dockerfileMenuIndex {
+				t.Errorf("mapDetectedDefault(%q) = %d (the 'use existing Dockerfile' entry); "+
+					"accepting this default skips Dockerfile generation and the build fails", appType, got)
+			}
+		})
+	}
+}
+
+// Detect's zero-value result (nothing recognised) must also map to a real
+// buildpack rather than to the Dockerfile entry.
+func TestMapDetectedDefault_UndetectedRepoDoesNotDefaultToDockerfile(t *testing.T) {
+	undetected := buildpack.Detect(t.TempDir())
+	if undetected.Detected {
+		t.Fatalf("empty directory should not be detected, got %+v", undetected)
+	}
+	if got := mapDetectedDefault(undetected.Name); got == dockerfileMenuIndex {
+		t.Errorf("mapDetectedDefault(%q) = %d for an unrecognised repo; there is no Dockerfile to use",
+			undetected.Name, got)
 	}
 }
 
@@ -438,6 +484,15 @@ func TestGetStateDir(t *testing.T) {
 	if !strings.Contains(dir, ".simpledeploy") {
 		t.Errorf("getStateDir = %q, should contain '.simpledeploy'", dir)
 	}
+
+	// getStateDir must honour SIMPLEDEPLOY_STATE_DIR — it is what init prints
+	// as the state.json location, and inside the service container the real
+	// path comes from this override, not from $HOME.
+	override := t.TempDir()
+	t.Setenv("SIMPLEDEPLOY_STATE_DIR", override)
+	if got := getStateDir(); got != override {
+		t.Errorf("getStateDir with SIMPLEDEPLOY_STATE_DIR=%q = %q, want the override", override, got)
+	}
 }
 
 func TestRunService_NoArgs(t *testing.T) {
@@ -495,7 +550,9 @@ func TestComposeIntegration(t *testing.T) {
 	if !strings.Contains(yaml, "qd-integration") {
 		t.Error("Generated compose should contain container name")
 	}
-	if !strings.Contains(yaml, "GO_ENV=\"test\"") {
+	// YAML map form — the list form ("- GO_ENV=\"test\"") delivered the quotes
+	// to the container as part of the value.
+	if !strings.Contains(yaml, "GO_ENV: \"test\"") {
 		t.Error("Generated compose should contain env vars")
 	}
 	if !strings.Contains(yaml, "traefik.enable=true") {
@@ -1864,5 +1921,321 @@ func TestValidateEnvSourcePath_ConfinementWasDeliberatelyDropped(t *testing.T) {
 	// whether the resolved path names a readable regular file.
 	if _, err := validateEnvSourcePath(filepath.Join(outside, "..", "nope.env"), appEnv); err == nil {
 		t.Error("a path that resolves to a nonexistent file must still be rejected")
+	}
+}
+
+// TestRunRedeploy_ReassertsCaddyRoute is a regression test for an app that
+// silently stops being routable.
+//
+// Redeploy used to call ReloadCaddy alone, on the reasoning that redeploy never
+// changes the route. But the route can be ABSENT rather than stale: RunDeploy
+// only warns when AddCaddyApp fails, so an app can be saved as "running" with
+// no Caddyfile block at all, and the Caddyfile is a plain text file an operator
+// may edit or restore from backup. Reloading then re-reads a config that still
+// does not route the app — the deploy reports success and the domain keeps
+// returning the proxy's default response, with nothing in any log to say why.
+//
+// AddCaddyApp strips any existing block for the same domain before appending,
+// so re-asserting on every redeploy is idempotent.
+func TestRunRedeploy_ReassertsCaddyRoute(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+
+	state.SaveConfig(&state.GlobalConfig{Proxy: "caddy", BaseDomain: "test.example.com"})
+
+	app := state.NewAppConfig()
+	app.Name = "caddyredeploy"
+	app.Branch = "main"
+	app.Repo = "https://github.com/test/app.git"
+	app.Domain = "caddyredeploy.test.example.com"
+	app.Port = 8080
+	app.Headers = map[string]string{"X-Frame-Options": "SAMEORIGIN"}
+	app.CurrentImage = "caddyredeploy:old"
+	state.SaveApp(app)
+
+	appDir := cfgpkg.AppDir("caddyredeploy")
+	os.MkdirAll(appDir, 0755)
+	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"),
+		[]byte("services:\n  caddyredeploy:\n    image: caddyredeploy:old\n"), 0600)
+
+	restore := swapRedeployDeps(t)
+	defer restore()
+
+	var addedName, addedDomain string
+	var addedPort int
+	var addedHeaders map[string]string
+	addCalls := 0
+	oldAdd := proxyAddCaddyApp
+	proxyAddCaddyApp = func(name, domain string, port int, headers map[string]string) error {
+		addCalls++
+		addedName, addedDomain, addedPort, addedHeaders = name, domain, port, headers
+		return nil
+	}
+	defer func() { proxyAddCaddyApp = oldAdd }()
+
+	reloadCalls := 0
+	oldReload := proxyReloadCaddy
+	proxyReloadCaddy = func() error { reloadCalls++; return nil }
+	defer func() { proxyReloadCaddy = oldReload }()
+
+	var redeployErr error
+	out := captureStdout(func() {
+		redeployErr = RunRedeploy([]string{"caddyredeploy"})
+	})
+	if redeployErr != nil {
+		t.Fatalf("RunRedeploy failed: %v\n%s", redeployErr, out)
+	}
+
+	if addCalls != 1 {
+		t.Errorf("AddCaddyApp called %d times, want 1 — redeploy must re-assert the route", addCalls)
+	}
+	if reloadCalls != 1 {
+		t.Errorf("ReloadCaddy called %d times, want 1", reloadCalls)
+	}
+	if addedName != "caddyredeploy" || addedDomain != "caddyredeploy.test.example.com" || addedPort != 8080 {
+		t.Errorf("AddCaddyApp got (%q, %q, %d), want (caddyredeploy, caddyredeploy.test.example.com, 8080)",
+			addedName, addedDomain, addedPort)
+	}
+	if addedHeaders["X-Frame-Options"] != "SAMEORIGIN" {
+		t.Errorf("AddCaddyApp headers = %v, want the app's configured headers", addedHeaders)
+	}
+}
+
+// TestRunRedeploy_SkipsCaddyRouteForTraefik confirms the re-assert above is
+// Caddy-only: Traefik discovers routes from container labels, so there is no
+// Caddyfile to touch.
+func TestRunRedeploy_SkipsCaddyRouteForTraefik(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+	cfgpkg.BaseDir = filepath.Join(dir, "opt", "simpledeploy")
+
+	state.SaveConfig(&state.GlobalConfig{Proxy: "traefik", BaseDomain: "test.example.com"})
+
+	app := state.NewAppConfig()
+	app.Name = "traefikredeploy"
+	app.Branch = "main"
+	app.Repo = "https://github.com/test/app.git"
+	app.Domain = "traefikredeploy.test.example.com"
+	app.Port = 8080
+	app.CurrentImage = "traefikredeploy:old"
+	state.SaveApp(app)
+
+	appDir := cfgpkg.AppDir("traefikredeploy")
+	os.MkdirAll(appDir, 0755)
+	os.WriteFile(filepath.Join(appDir, "docker-compose.yml"),
+		[]byte("services:\n  traefikredeploy:\n    image: traefikredeploy:old\n"), 0600)
+
+	restore := swapRedeployDeps(t)
+	defer restore()
+
+	addCalls := 0
+	oldAdd := proxyAddCaddyApp
+	proxyAddCaddyApp = func(string, string, int, map[string]string) error { addCalls++; return nil }
+	defer func() { proxyAddCaddyApp = oldAdd }()
+
+	var redeployErr error
+	out := captureStdout(func() {
+		redeployErr = RunRedeploy([]string{"traefikredeploy"})
+	})
+	if redeployErr != nil {
+		t.Fatalf("RunRedeploy failed: %v\n%s", redeployErr, out)
+	}
+
+	if addCalls != 0 {
+		t.Errorf("AddCaddyApp called %d times under Traefik, want 0", addCalls)
+	}
+}
+
+// swapRedeployDeps stubs out everything RunRedeploy shells out to, so the
+// proxy-handling assertions above do not need Docker or a network.
+func swapRedeployDeps(t *testing.T) func() {
+	t.Helper()
+
+	oldPull, oldBuild, oldUp := gitPull, dockerBuildImage, dockerComposeUp
+	oldStatus, oldCleanup := dockerContainerStatus, dockerCleanupOldImages
+	oldRestarts, oldStable := dockerContainerRestarts, containerStableFor
+
+	gitPull = func(context.Context, string, string, ...string) error { return nil }
+	dockerBuildImage = func(_ context.Context, _, appName string) (string, error) {
+		return appName + ":20260730-120000", nil
+	}
+	dockerComposeUp = func(context.Context, string) error { return nil }
+	dockerContainerStatus = func(context.Context, string) (string, error) { return "running", nil }
+	dockerContainerRestarts = func(context.Context, string) (int, error) { return 0, nil }
+	dockerCleanupOldImages = func(context.Context, string, int) error { return nil }
+	// No need to sit through the real stability window in a unit test.
+	containerStableFor = 0
+
+	return func() {
+		gitPull, dockerBuildImage, dockerComposeUp = oldPull, oldBuild, oldUp
+		dockerContainerStatus, dockerCleanupOldImages = oldStatus, oldCleanup
+		dockerContainerRestarts, containerStableFor = oldRestarts, oldStable
+	}
+}
+
+// stubContainerProbe drives waitForContainer from a scripted sequence of
+// (status, restartCount) observations. The last entry repeats once exhausted.
+func stubContainerProbe(t *testing.T, obs []struct {
+	status   string
+	restarts int
+}) func() {
+	t.Helper()
+	oldStatus, oldRestarts, oldStable := dockerContainerStatus, dockerContainerRestarts, containerStableFor
+
+	i := 0
+	at := func() (string, int) {
+		if i >= len(obs) {
+			return obs[len(obs)-1].status, obs[len(obs)-1].restarts
+		}
+		return obs[i].status, obs[i].restarts
+	}
+	dockerContainerStatus = func(context.Context, string) (string, error) {
+		s, _ := at()
+		return s, nil
+	}
+	dockerContainerRestarts = func(context.Context, string) (int, error) {
+		_, r := at()
+		i++ // advance once per poll, after both reads
+		return r, nil
+	}
+	// Deliberately non-zero: the stability window is the mechanism under test.
+	// Zeroing it would make waitForContainer return on the first "running" it
+	// sees, which is exactly the bug these tests exist to catch. Two seconds is
+	// two extra polls at the 1 s interval — enough to observe a crash cycle
+	// without slowing the suite noticeably.
+	containerStableFor = 2 * time.Second
+
+	return func() {
+		dockerContainerStatus, dockerContainerRestarts, containerStableFor = oldStatus, oldRestarts, oldStable
+	}
+}
+
+// TestWaitForContainer_DetectsCrashLoop is the regression test for a broken
+// deploy being reported as a success.
+//
+// App services are generated with `restart: unless-stopped`, so a container
+// that crashes on startup is restarted immediately and cycles between
+// "restarting" and a brief "running" — it never reaches "exited" or "dead".
+// waitForContainer returned on the first "running" it saw, so `redeploy` said
+// "redeployed successfully!", `list` showed the app green, and the rollback
+// that exists for precisely this case never fired. Confirmed end-to-end against
+// real Docker: RestartCount climbing, HTTP 502 from the proxy, success message
+// on stdout.
+//
+// The restart counter is what persists between the flickers, so that is what
+// this checks.
+func TestWaitForContainer_DetectsCrashLoop(t *testing.T) {
+	defer stubContainerProbe(t, []struct {
+		status   string
+		restarts int
+	}{
+		{"running", 0},
+		{"restarting", 1}, // died once and was put back
+		{"running", 2},
+	})()
+
+	got := waitForContainer(context.Background(), "qd-app", 10*time.Second)
+	if got != statusCrashLooping {
+		t.Errorf("waitForContainer = %q, want %q", got, statusCrashLooping)
+	}
+	if !isFailedContainerState(got) {
+		t.Error("a crash-looping container must be a failed state so redeploy rolls back")
+	}
+}
+
+// TestWaitForContainer_HealthyStaysHealthy guards the other direction: a
+// container that starts slowly and then stays up must not be flagged.
+func TestWaitForContainer_HealthyStaysHealthy(t *testing.T) {
+	defer stubContainerProbe(t, []struct {
+		status   string
+		restarts int
+	}{
+		{"created", 0},
+		{"running", 0},
+		{"running", 0},
+	})()
+
+	if got := waitForContainer(context.Background(), "qd-app", 10*time.Second); got != "running" {
+		t.Errorf("waitForContainer = %q, want \"running\"", got)
+	}
+}
+
+// TestWaitForContainer_IgnoresPreExistingRestarts covers the case where compose
+// leaves an existing container in place: restarts it accumulated in a previous
+// life are not evidence that this deploy is broken. Only growth counts.
+func TestWaitForContainer_IgnoresPreExistingRestarts(t *testing.T) {
+	defer stubContainerProbe(t, []struct {
+		status   string
+		restarts int
+	}{
+		{"running", 7},
+		{"running", 7},
+	})()
+
+	if got := waitForContainer(context.Background(), "qd-app", 10*time.Second); got != "running" {
+		t.Errorf("waitForContainer = %q, want \"running\" (historical restarts are not a crash loop)", got)
+	}
+}
+
+// TestWaitForContainer_ExitedIsStillFailure keeps the original terminal-state
+// detection working for containers without a restart policy.
+func TestWaitForContainer_ExitedIsStillFailure(t *testing.T) {
+	defer stubContainerProbe(t, []struct {
+		status   string
+		restarts int
+	}{
+		{"created", 0},
+		{"exited", 0},
+	})()
+
+	got := waitForContainer(context.Background(), "qd-app", 10*time.Second)
+	if got != "exited" || !isFailedContainerState(got) {
+		t.Errorf("waitForContainer = %q, want \"exited\" and a failed state", got)
+	}
+}
+
+// TestWaitForContainer_RequiresStability confirms the stability window is real:
+// a container observed running that dies a moment later must not be reported as
+// running. It sets its own window because TestMain shortens the package-wide
+// default to keep the Docker-backed tests fast.
+func TestWaitForContainer_RequiresStability(t *testing.T) {
+	oldStatus, oldRestarts, oldStable := dockerContainerStatus, dockerContainerRestarts, containerStableFor
+	defer func() {
+		dockerContainerStatus, dockerContainerRestarts, containerStableFor = oldStatus, oldRestarts, oldStable
+	}()
+	containerStableFor = 3 * time.Second
+
+	calls := 0
+	dockerContainerStatus = func(context.Context, string) (string, error) {
+		calls++
+		if calls <= 2 {
+			return "running", nil
+		}
+		return "exited", nil
+	}
+	dockerContainerRestarts = func(context.Context, string) (int, error) { return 0, nil }
+
+	got := waitForContainer(context.Background(), "qd-app", 20*time.Second)
+	if got != "exited" {
+		t.Errorf("waitForContainer = %q, want \"exited\" — a brief \"running\" must not count as up", got)
+	}
+}
+
+// TestWaitForContainer_ToleratesMissingRestartCount ensures the deploy does not
+// break where the restart counter cannot be read (older Docker, mocked probe):
+// behaviour falls back to status-only.
+func TestWaitForContainer_ToleratesMissingRestartCount(t *testing.T) {
+	oldStatus, oldRestarts, oldStable := dockerContainerStatus, dockerContainerRestarts, containerStableFor
+	defer func() {
+		dockerContainerStatus, dockerContainerRestarts, containerStableFor = oldStatus, oldRestarts, oldStable
+	}()
+
+	dockerContainerStatus = func(context.Context, string) (string, error) { return "running", nil }
+	dockerContainerRestarts = func(context.Context, string) (int, error) { return 0, errors.New("no such field") }
+	containerStableFor = 0
+
+	if got := waitForContainer(context.Background(), "qd-app", 5*time.Second); got != "running" {
+		t.Errorf("waitForContainer = %q, want \"running\"", got)
 	}
 }

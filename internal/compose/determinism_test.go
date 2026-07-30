@@ -60,7 +60,9 @@ func TestGenerate_SortsEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
-	order := []string{"ALPHA=", "BRAVO=", "MIKE=", "YANKEE=", "ZULU="}
+	// "KEY:" — env vars are emitted as YAML map entries, not "KEY=" list items
+	// (see TestGenerate_EnvUsesYAMLMapForm in generator_test.go).
+	order := []string{"ALPHA:", "BRAVO:", "MIKE:", "YANKEE:", "ZULU:"}
 	prev := -1
 	for _, key := range order {
 		idx := strings.Index(out, key)

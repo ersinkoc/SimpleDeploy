@@ -53,9 +53,16 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 		window:   window,
 		stopChan: make(chan struct{}),
 	}
+	// cleanupInterval is read here, in the caller's goroutine, and not inside
+	// the goroutine below. Reading it there made the load race with any test
+	// that swaps the tunable: the spawned goroutine is not ordered against
+	// anything the caller does afterwards, so the load could land arbitrarily
+	// late. Capturing it at construction time puts the read in the same
+	// happens-before chain as the constructor call.
+	interval := cleanupInterval
 	// Cleanup stale entries every minute
 	go func() {
-		ticker := time.NewTicker(cleanupInterval)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -244,9 +251,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		event = r.Header.Get("X-Gitea-Event")
 	}
 	ref := extractRefFromPayload(string(body))
+	// Non-branch refs (tags, notes) leave branch empty, which the check further
+	// down treats as "no branch information" rather than as a mismatch.
 	branch := ""
-	if strings.HasPrefix(ref, "refs/heads/") {
-		branch = strings.TrimPrefix(ref, "refs/heads/")
+	if head, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		branch = head
 	}
 
 	// Check event type (normalize various provider event strings)

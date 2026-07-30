@@ -10,7 +10,12 @@ import (
 )
 
 func BuildImage(ctx context.Context, contextDir, appName string) (string, error) {
-	timestamp := time.Now().Format("20060102-150405")
+	// UTC, not local time. ListImages orders an app's images by reverse string
+	// sort and CleanupOldImages trusts that as recency ordering, which only
+	// holds if the timestamps are monotonic. A local-time stamp repeats the
+	// same hour during a DST fall-back, so images built in that window sort as
+	// older than they are and the prune keeps the wrong three.
+	timestamp := time.Now().UTC().Format("20060102-150405")
 	tag := fmt.Sprintf("%s:%s", appName, timestamp)
 
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)

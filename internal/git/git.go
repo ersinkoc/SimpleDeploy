@@ -13,6 +13,7 @@ var (
 	osMkdirAll   = os.MkdirAll
 	osCreateTemp = os.CreateTemp
 	osWriteFile  = os.WriteFile
+	osChmod      = os.Chmod
 )
 
 // tokenEnv builds the environment used to feed a credential to git without
@@ -129,6 +130,19 @@ func writeAskpassScript(token string) (path string, cleanup func(), err error) {
 	if err := osWriteFile(name, []byte(script), 0700); err != nil {
 		os.Remove(name)
 		return "", nil, err
+	}
+	// The 0700 above is a no-op and cannot be relied on: os.WriteFile only
+	// applies its perm argument when it CREATES the file, and os.CreateTemp
+	// has already created this one at 0600. The script therefore ended up
+	// non-executable, git could not exec it
+	// ("fatal: cannot exec '/tmp/qd-askpass-...': Permission denied"), and
+	// with GIT_TERMINAL_PROMPT=0 it fell straight through to
+	// "could not read Username for 'https://...'". Every clone and pull of a
+	// private repository failed — including unattended webhook redeploys.
+	// Chmod explicitly so the mode does not depend on how the file was made.
+	if err := osChmod(name, 0700); err != nil {
+		os.Remove(name)
+		return "", nil, fmt.Errorf("failed to make askpass script executable: %w", err)
 	}
 
 	// Return the token via environment variable instead of embedding in script
