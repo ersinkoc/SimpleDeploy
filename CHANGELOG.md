@@ -45,6 +45,20 @@ flow logic, webhook protocol correctness against provider documentation).
   deploy wait could run before a handler had registered its deploy.
 - **Two builds in the same second collided on one image tag**, making the
   deployed image nondeterministic. Tags now carry milliseconds.
+- **Deploys of one app are now serialized across processes.** A hand-run
+  `redeploy` during a webhook-triggered deploy of the same app ran fully
+  concurrently with it: both `git pull`ed the same source tree, the loser's
+  rollback could revert the winner's *successful* deploy, and the winner's image
+  prune could delete the image the loser had just built. `deploy`, `redeploy`
+  and `remove` now hold a per-app lock and fail fast, naming the holder, instead
+  of interleaving. This also closes the deploy-name race in which two wizard
+  sessions picking the same name both passed the "already exists" check and the
+  loser's cleanup deleted the winner's cloned source mid-build.
+- **The webhook flood guard was tight enough to throttle real traffic.** Behind
+  the proxy every delivery shares one bucket key, so the old 60/min was a global
+  ceiling a busy multi-app server could trip with its own pushes — after which
+  genuine deliveries got 429 and push-to-deploy silently stopped. Raised to
+  600/min; see CLAUDE.md for why a stricter failure-only bucket does not help.
 
 ### Generated-config correctness
 

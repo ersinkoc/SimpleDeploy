@@ -76,6 +76,17 @@ func RunDeploy() error {
 		return fmt.Errorf("application '%s' already exists. Use 'simpledeploy redeploy %s' to update", app.Name, app.Name)
 	}
 
+	// Hold the per-app deploy lock for the rest of this function. Besides
+	// keeping a concurrent redeploy out, this closes the check-then-act above:
+	// two interactive sessions choosing the same name both passed the exists
+	// check (neither had saved state yet), and the loser's abort cleanup then
+	// deleted the winner's cloned source and .env mid-build.
+	releaseLock, err := acquireDeployLock(app.Name)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+
 	// 3. Clone repo
 	appDir := cfgpkg.AppDir(app.Name)
 	sourceDir := filepath.Join(appDir, "source")

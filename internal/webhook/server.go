@@ -142,7 +142,12 @@ func NewServer(port int, secret string) *Server {
 		Secret:        secret,
 		deployLocks:   make(map[string]bool),
 		deployPending: make(map[string]bool),
-		limiter:       newRateLimiter(60, time.Minute), // 60 req/min per IP
+		// 600/min, not 60. Behind the proxy every delivery shares one bucket
+		// key, so 60 was a global ceiling low enough for a busy multi-app
+		// server's own pushes to trip — throttling exactly the traffic the
+		// server exists to serve. See handleWebhook for why this is a flood
+		// guard rather than an authorization control.
+		limiter: newRateLimiter(600, time.Minute),
 	}
 }
 
@@ -230,7 +235,22 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limiting
+	// Rate limiting: a flood guard, deliberately generous.
+	//
+	// It cannot be a tight budget. Behind the reverse proxy every request
+	// arrives from the same Docker bridge-gateway address, so the per-IP bucket
+	// is effectively ONE GLOBAL bucket — and it is necessarily charged before
+	// signature verification, since verification requires reading the body.
+	// A tight limit therefore lets unauthenticated traffic hold genuine
+	// provider deliveries at 429 and silently stop push-to-deploy, and the
+	// obvious "charge failures to a stricter bucket" refinement does not help:
+	// with one shared key, blocking that bucket blocks the valid deliveries too.
+	//
+	// So the limit's job is narrow — bound how much body reading and HMAC work
+	// an anonymous caller can force — while staying far above what a busy
+	// multi-app server legitimately delivers. Deploy authorization is the HMAC
+	// gate below, and the endpoint should additionally be firewalled to the
+	// proxy (see CLAUDE.md's known limitations).
 	ip := clientIP(r.RemoteAddr)
 	if !s.limiter.allow(ip) {
 		http.Error(w, "Too many requests", http.StatusTooManyRequests)

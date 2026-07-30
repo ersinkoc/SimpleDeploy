@@ -233,22 +233,33 @@ the real generators perform).
   error *after* startup; deleting the directory then orphaned running containers
   with no compose file to stop them and a live proxy route.
 
+- **`deploy`, `redeploy` and `remove` hold a per-app file lock
+  (`acquireDeployLock`).** The webhook server's `deployLocks` map only covers
+  deploys it starts itself, so a hand-run `simpledeploy redeploy X` raced a
+  webhook-triggered deploy of X: parallel `git pull` of one source tree (git's
+  index.lock fails one at random), a loser's rollback that reverted the winner's
+  *successful* deploy, and an image prune that deleted the image the peer had
+  just built. The lock file lives in `AppsDir`, not the app directory — deploy's
+  abort path removes that directory wholesale. Contention fails fast naming the
+  holder rather than queueing, because a deploy takes minutes and waiting would
+  read as a hang.
+
 ### Known limitations (deliberate, not defects)
 
-- **No cross-process per-app deploy lock.** `deployLocks` is in the webhook
-  server's memory only, so `simpledeploy redeploy X` run by hand during a
-  webhook-triggered deploy of X still races it (concurrent `git pull` of the
-  same source tree, and a rollback that can revert the peer's compose changes).
-  Millisecond image tags remove the tag collision; the rest is unguarded.
 - **The webhook listener binds all interfaces** and `service install` publishes
   the port, because one proxy route (`host.docker.internal:<port>`) serves both
   the host-process and containerised modes. The deploy trigger is HMAC-gated,
-  but the port should be firewalled — GitLab-token mode sends the shared secret
-  as a plain header.
-- **The rate limiter keys on `RemoteAddr`.** Behind the proxy every request
-  arrives from the bridge gateway, so 60/min is effectively global and is
-  consumed before signature verification; sustained unauthenticated traffic can
-  starve genuine deliveries with 429s.
+  but the port should be firewalled to the proxy — GitLab-token mode sends the
+  shared secret as a plain header.
+- **The rate limiter cannot be a tight budget.** It keys on `RemoteAddr`, and
+  behind the proxy every request arrives from the bridge gateway, so the bucket
+  is effectively global — and it must be charged before signature verification,
+  which needs the body. It is therefore a flood guard only (600/min, raised from
+  60 because that ceiling was low enough for a busy multi-app server's own
+  pushes to trip), and sustained anonymous traffic can still exhaust it.
+  Charging failures to a stricter second bucket does NOT help: with one shared
+  key, blocking that bucket blocks the valid deliveries with it. Authorization
+  is the HMAC gate; availability comes from firewalling.
 
 ### Testing gaps these bugs came from
 

@@ -415,3 +415,63 @@ func TestClientIP_BracketStripConsistency(t *testing.T) {
 		t.Errorf("bracketed v6 with/without port should match: %q vs %q", withPort, noPort)
 	}
 }
+
+// TestRateLimit_BudgetSurvivesRealisticPushVolume pins that the flood guard is
+// not tight enough to throttle the traffic the server exists to serve.
+//
+// Behind the reverse proxy every delivery arrives from the same bridge-gateway
+// address, so the per-IP bucket is effectively ONE GLOBAL bucket, and it is
+// necessarily charged before signature verification (verification needs the
+// body). At the previous 60/min that global ceiling was low enough for a busy
+// multi-app server's own pushes to trip it, and once tripped, genuine
+// deliveries got 429 and push-to-deploy silently stopped.
+//
+// Note the limitation this test does NOT claim to fix: with one shared bucket
+// key, sustained anonymous traffic can still exhaust the budget. Deploy
+// authorization is the HMAC gate, and the port should be firewalled to the
+// proxy (documented in CLAUDE.md). Charging failures to a stricter second
+// bucket does not help — blocking that bucket blocks the valid deliveries with
+// it.
+func TestRateLimit_BudgetSurvivesRealisticPushVolume(t *testing.T) {
+	webhookInitState(t)
+	webhookSaveApp(t, "myapp", "main")
+
+	srv := NewServer(9000, "secret")
+	defer srv.limiter.stop()
+	deployed := make(chan struct{}, 1)
+	srv.SetDeployHandler(func(ctx context.Context, appName string) error {
+		deployed <- struct{}{}
+		return nil
+	})
+
+	body := `{"ref":"refs/heads/main"}`
+
+	// Well past the old 60/min ceiling.
+	for i := 0; i < 200; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+		req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
+		req.Header.Set("X-GitHub-Event", "push")
+		rec := httptest.NewRecorder()
+		srv.handleWebhook(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("hit the rate limit after only %d requests; the flood guard is too tight for a busy server", i+1)
+		}
+	}
+
+	// A valid delivery still works after that volume.
+	req := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", webhookSignBody([]byte(body), "secret"))
+	req.Header.Set("X-GitHub-Event", "push")
+	rec := httptest.NewRecorder()
+	srv.handleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a valid delivery should still be accepted, got %d: %s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-deployed:
+	case <-time.After(2 * time.Second):
+		t.Error("the valid delivery should have triggered a deploy")
+	}
+	srv.deployWg.Wait()
+}

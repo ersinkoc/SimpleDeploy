@@ -35,6 +35,17 @@ func RunRedeployContext(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Serialize deploys of this app ACROSS PROCESSES before touching anything.
+	// The webhook server's in-memory lock does not cover a CLI redeploy run by
+	// hand, and the two racing corrupted each other: parallel `git pull` of the
+	// same source tree, a rollback that reverted the peer's successful deploy,
+	// and an image prune that deleted the image the peer had just built.
+	releaseLock, err := acquireDeployLock(appName)
+	if err != nil {
+		return err
+	}
+	defer releaseLock()
+
 	app, err := state.GetApp(appName)
 	if err != nil {
 		return err

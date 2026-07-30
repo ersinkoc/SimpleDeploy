@@ -260,22 +260,28 @@ func TestHandleWebhook_RateLimitExceeded(t *testing.T) {
 	webhookInitState(t)
 	webhookSaveApp(t, "myapp", "main")
 	srv := NewServer(9000, "secret")
+	defer srv.limiter.stop()
+
+	// Drive the limit from its configured value rather than a hard-coded count:
+	// the flood guard was raised from 60 to 600/min because behind the proxy
+	// every delivery shares one bucket key, and a literal here silently stopped
+	// testing anything when that changed.
+	limit := srv.limiter.limit
 
 	body := `{"ref":"refs/heads/main"}`
 	reqBase := httptest.NewRequest(http.MethodPost, "/_qd/webhook/myapp", strings.NewReader(body))
 	reqBase.Header.Set("X-GitHub-Event", "push")
 
-	// Exhaust rate limit for a specific IP
+	// Exhaust the budget for this IP.
 	rec := httptest.NewRecorder()
-	for i := 0; i < 65; i++ {
+	for i := 0; i < limit+5; i++ {
 		req := reqBase.Clone(reqBase.Context())
-		// Reset recorder
 		rec = httptest.NewRecorder()
 		srv.handleWebhook(rec, req)
 	}
 
 	if rec.Code != http.StatusTooManyRequests {
-		t.Errorf("Expected 429 after rate limit, got %d", rec.Code)
+		t.Errorf("Expected 429 after %d requests (limit %d), got %d", limit+5, limit, rec.Code)
 	}
 }
 
