@@ -645,36 +645,7 @@ func buildComposeData(app *state.AppConfig, cfg *state.GlobalConfig, volumes []s
 		}
 
 		if dbCfg.HealthCheck != nil {
-			testSlice := []string{}
-			if t, ok := dbCfg.HealthCheck["test"]; ok {
-				if arr, ok := t.([]string); ok {
-					testSlice = arr
-				}
-			}
-			interval := "10s"
-			if v, ok := dbCfg.HealthCheck["interval"]; ok {
-				if s, ok := v.(string); ok {
-					interval = s
-				}
-			}
-			timeout := "5s"
-			if v, ok := dbCfg.HealthCheck["timeout"]; ok {
-				if s, ok := v.(string); ok {
-					timeout = s
-				}
-			}
-			retries := 5
-			if v, ok := dbCfg.HealthCheck["retries"]; ok {
-				if n, ok := v.(int); ok {
-					retries = n
-				}
-			}
-			dbSvc.HealthCheck = &compose.HealthCheckData{
-				Test:     testSlice,
-				Interval: interval,
-				Timeout:  timeout,
-				Retries:  retries,
-			}
+			dbSvc.HealthCheck = dbCfg.HealthCheck
 		}
 
 		data.Databases = append(data.Databases, dbSvc)

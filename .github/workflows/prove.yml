@@ -1,0 +1,38 @@
+name: Prove (full evidence run)
+
+# Runs scripts/prove.sh — every CI gate plus the Docker-backed suites that
+# prove behaviour rather than text: what a container actually receives, whether
+# a crash loop is really detected, whether a real Caddy accepts the generated
+# config, and the full deploy → push → redeploy → rollback chain.
+#
+# This is the single workflow that catches the "green locally, red on CI" class:
+# non-root path resolution (CI runners are non-root), cgo-enabled race detection
+# on Linux, and the complete integration suite. Mirrors exactly what a developer
+# gets from `make prove` locally.
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Monday 04:17 UTC — same cadence as the integration workflow but
+    # as a standalone so a failure here is distinguishable from a plain
+    # integration-suite failure.
+    - cron: '17 4 * * 1'
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Docker info
+        run: docker version && docker compose version
+
+      - name: Full evidence run
+        env:
+          SIMPLEDEPLOY_INTEGRATION: '1'
+        run: sh scripts/prove.sh

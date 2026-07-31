@@ -36,7 +36,6 @@ var (
 	composeTimeout   = 5 * time.Minute
 	listTimeout      = 15 * time.Second
 	tagTimeout       = 30 * time.Second
-	pullTimeout      = 10 * time.Minute
 	containerTimeout = 60 * time.Second
 	execTimeout      = 60 * time.Second
 	statusTimeout    = 10 * time.Second

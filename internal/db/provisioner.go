@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/compose"
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
@@ -20,7 +21,7 @@ type DatabaseConfig struct {
 	Image        string
 	Env          map[string]string
 	Volume       string
-	HealthCheck  map[string]interface{}
+	HealthCheck  *compose.HealthCheckData
 	ConnTemplate string
 }
 
@@ -33,11 +34,11 @@ var databaseDefs = map[string]DatabaseConfig{
 			"MYSQL_DATABASE":      "", // app name
 		},
 		Volume: "/var/lib/mysql",
-		HealthCheck: map[string]interface{}{
-			"test":     []string{"CMD", "mysqladmin", "ping", "-h", "localhost"},
-			"interval": "10s",
-			"timeout":  "5s",
-			"retries":  5,
+		HealthCheck: &compose.HealthCheckData{
+			Test:     []string{"CMD", "mysqladmin", "ping", "-h", "localhost"},
+			Interval: "10s",
+			Timeout:  "5s",
+			Retries:  5,
 		},
 		ConnTemplate: "mysql://root:%s@qd-%s-mysql:3306/%s",
 	},
@@ -49,11 +50,11 @@ var databaseDefs = map[string]DatabaseConfig{
 			"POSTGRES_DB":       "", // app name
 		},
 		Volume: "/var/lib/postgresql/data",
-		HealthCheck: map[string]interface{}{
-			"test":     []string{"CMD-SHELL", "pg_isready -U postgres"},
-			"interval": "10s",
-			"timeout":  "5s",
-			"retries":  5,
+		HealthCheck: &compose.HealthCheckData{
+			Test:     []string{"CMD-SHELL", "pg_isready -U postgres"},
+			Interval: "10s",
+			Timeout:  "5s",
+			Retries:  5,
 		},
 		ConnTemplate: "postgresql://postgres:%s@qd-%s-postgresql:5432/%s",
 	},
@@ -65,11 +66,11 @@ var databaseDefs = map[string]DatabaseConfig{
 			"MARIADB_DATABASE":      "",
 		},
 		Volume: "/var/lib/mysql",
-		HealthCheck: map[string]interface{}{
-			"test":     []string{"CMD", "healthcheck.sh", "--connect"},
-			"interval": "10s",
-			"timeout":  "5s",
-			"retries":  5,
+		HealthCheck: &compose.HealthCheckData{
+			Test:     []string{"CMD", "healthcheck.sh", "--connect"},
+			Interval: "10s",
+			Timeout:  "5s",
+			Retries:  5,
 		},
 		ConnTemplate: "mysql://root:%s@qd-%s-mariadb:3306/%s",
 	},
@@ -86,11 +87,11 @@ var databaseDefs = map[string]DatabaseConfig{
 			"MONGO_INITDB_ROOT_PASSWORD": "",
 		},
 		Volume: "/data/db",
-		HealthCheck: map[string]interface{}{
-			"test":     []string{"CMD", "mongosh", "--eval", "db.adminCommand('ping')"},
-			"interval": "10s",
-			"timeout":  "5s",
-			"retries":  5,
+		HealthCheck: &compose.HealthCheckData{
+			Test:     []string{"CMD", "mongosh", "--eval", "db.adminCommand('ping')"},
+			Interval: "10s",
+			Timeout:  "5s",
+			Retries:  5,
 		},
 		// authSource=admin is required: the root user created by the entrypoint
 		// lives in the `admin` database, not in the per-app database named in

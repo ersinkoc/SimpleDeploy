@@ -22,13 +22,19 @@ func RunRedeploy(args []string) error {
 
 // RunRedeployContext is the ctx-aware variant used by the webhook server,
 // which arms a per-deploy timeout (deployTimeout, default 30 min) and
-// shuts the rate-limiter down on shutdown. ctx is checked at coarse
-// boundaries between major steps; if cancelled, the function returns
-// without continuing. The long-running subprocess steps themselves
-// (gitPull, dockerBuildImage, dockerComposeUp) currently use their own
-// internal timeouts and do NOT honor caller ctx — fully cancellable
-// deploys would require threading ctx into git.Pull, docker.BuildImage,
-// docker.ComposeUp, which is intentionally deferred.
+// shuts the rate-limiter down on shutdown.
+//
+// Cancellation is honored at two levels. Between major steps, ctx.Err() is
+// checked explicitly before git pull, build, and compose up. Within each
+// subprocess step, ctx is threaded into exec.CommandContext via git.Pull,
+// docker.BuildImage, and docker.ComposeUp — each wraps the caller ctx with a
+// timeout but still uses exec.CommandContext(ctx, ...), so cancelling ctx
+// kills the running git or docker process immediately rather than waiting for
+// the subprocess's own timeout.
+//
+// RunDeploy (initial deploy) deliberately uses context.Background() for its
+// subprocess calls and is therefore NOT cancellable mid-build. This function
+// is the cancellable path used by the webhook server.
 func RunRedeployContext(ctx context.Context, args []string) error {
 	appName, err := appNameFromArgs(args)
 	if err != nil {

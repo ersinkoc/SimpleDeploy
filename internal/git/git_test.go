@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClone_InvalidRepo(t *testing.T) {
@@ -437,5 +438,77 @@ func TestWriteAskpassScript_ChmodError(t *testing.T) {
 	}
 	if _, statErr := os.Stat(chmodded); !os.IsNotExist(statErr) {
 		t.Errorf("temp script %s should have been removed after chmod failure", chmodded)
+	}
+}
+
+// TestPull_CancelledByContext verifies that cancelling the caller's context
+// kills the in-flight git subprocess rather than waiting for it to finish.
+//
+// This test exists because the comment in redeploy.go used to claim that
+// git.Pull, docker.BuildImage, and docker.ComposeUp "do NOT honor caller ctx"
+// — which was wrong: all three use exec.CommandContext(ctx, ...). The
+// misleading comment risked someone "fixing" the already-working cancellation
+// path. This test proves the behaviour so a future reader does not have to
+// take the comment on faith.
+//
+// The test sets up a real local repo whose fetch target is an unreachable
+// URL, giving git enough work to still be running when we cancel. It then
+// verifies that Pull returns with an error rather than hanging — proving
+// the subprocess was killed by ctx.Done, not by completing normally. On
+// Linux the process-group kill is near-instant; on Windows git's child
+// process (git-remote-https) survives until the OS TCP timeout (~21 s).
+func TestPull_CancelledByContext(t *testing.T) {
+	// Set up a clone of a local repo so we have a valid working tree.
+	repoDir := t.TempDir()
+	runGitCmd(t, repoDir, "init")
+	runGitCmd(t, repoDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, repoDir, "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(repoDir, "file.txt"), []byte("v1"), 0644)
+	runGitCmd(t, repoDir, "add", ".")
+	runGitCmd(t, repoDir, "commit", "-m", "initial")
+
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	if err := Clone(context.Background(), repoDir, "master", cloneDir, ""); err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+
+	// Point origin at an unreachable address so fetch blocks long enough for
+	// us to cancel it. A non-routable TEST-NET-1 address ensures the TCP
+	// connect hangs rather than failing instantly.
+	runGitCmd(t, cloneDir, "remote", "set-url", "origin",
+		"http://192.0.2.1/delayed.git")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel after a short delay — enough for the subprocess to have started.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := Pull(ctx, cloneDir, "master")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Pull should fail when context is cancelled")
+	}
+	// The key assertion: Pull returns with an error, proving ctx cancellation
+	// reached the subprocess. On Linux (CI), exec.CommandContext kills the
+	// process group and Pull returns within milliseconds. On Windows, git
+	// spawns git-remote-https as a child; CommandContext kills only the parent
+	// (not the child holding the TCP connect), so Pull blocks until the OS TCP
+	// retransmission timeout (~21 s). Both platforms still return far sooner
+	// than the ~2 min git would hang without ctx — that is the proof this test
+	// exists to provide.
+	//
+	// We only log on Windows and assert on Linux/CI to avoid a flaky threshold
+	// on a platform-dependent OS behavior that is outside SimpleDeploy's code.
+	if elapsed > 30*time.Second {
+		if runtime.GOOS == "windows" {
+			t.Logf("Pull took %v on Windows (expected: OS TCP timeout, not immediate)", elapsed)
+		} else {
+			t.Errorf("Pull took %v to return after ctx cancel; expected process-group kill on Linux", elapsed)
+		}
 	}
 }

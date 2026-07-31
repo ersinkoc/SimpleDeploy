@@ -469,12 +469,12 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // runDeploy invokes the deploy handler once, bounded by deployTimeout.
 //
 // ctx is passed to the handler so it can short-circuit on timeout or shutdown.
-// Whether real cancellation actually interrupts an in-flight deploy depends on
-// the handler honoring ctx — RunRedeployContext checks ctx.Err() at major
-// boundaries (between git pull, build, compose up, caddy reload, state save)
-// but the long-running subprocess steps themselves run to their own internal
-// timeouts. Future work can thread ctx into docker.ComposeUp /
-// docker.BuildImage / git.Pull for true per-syscall cancellation.
+// RunRedeployContext honors ctx at two levels: explicit ctx.Err() checks
+// between major steps, and ctx threaded into exec.CommandContext for each
+// subprocess (git.Pull, docker.BuildImage, docker.ComposeUp), so cancelling
+// ctx kills the running process immediately rather than waiting for its own
+// timeout. A custom deploy handler that ignores ctx would still park on
+// <-done below; the shipped handler (RunRedeployContext) honors it.
 func (s *Server) runDeploy(appName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), deployTimeout)
 	defer cancel()

@@ -17,11 +17,29 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Gofmt
+        run: |
+          UNFORMATTED=$(gofmt -l . 2>/dev/null | grep -v '^$' || true)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "::error::Files not formatted with gofmt:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
       - name: Vet
         run: go vet ./...
 
       - name: Build
         run: CGO_ENABLED=0 go build -ldflags "-s -w" -o simpledeploy .
+
+      - name: Binary smoke test
+        run: |
+          ./simpledeploy version
+          ./simpledeploy help
+          if ./simpledeploy definitely-not-a-command >/dev/null 2>&1; then
+            echo "::error::unknown command should exit non-zero"
+            exit 1
+          fi
 
       - name: Test
         run: go test -p=1 -count=1 ./...

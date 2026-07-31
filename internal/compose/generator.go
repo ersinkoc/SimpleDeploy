@@ -13,6 +13,29 @@ import (
 	"github.com/ersinkoc/SimpleDeploy/internal/state"
 )
 
+// Validate checks that the healthcheck durations are valid Go duration strings
+// (parseable by time.ParseDuration) and that Retries is non-negative.
+//
+// This closes the gap flagged in the refactor report: Interval and Timeout were
+// interpolated as raw %s strings into the compose YAML with no validation, so a
+// typo or tampered state value could produce an invalid healthcheck block that
+// docker compose would reject at `up` time — after the image had been built.
+func (h *HealthCheckData) Validate() error {
+	if h == nil {
+		return nil
+	}
+	if _, err := time.ParseDuration(h.Interval); err != nil {
+		return fmt.Errorf("invalid healthcheck interval %q: %w", h.Interval, err)
+	}
+	if _, err := time.ParseDuration(h.Timeout); err != nil {
+		return fmt.Errorf("invalid healthcheck timeout %q: %w", h.Timeout, err)
+	}
+	if h.Retries < 0 {
+		return fmt.Errorf("invalid healthcheck retries %d: must be >= 0", h.Retries)
+	}
+	return nil
+}
+
 type ComposeData struct {
 	AppName     string
 	Image       string
@@ -294,6 +317,9 @@ func Generate(data *ComposeData) (string, error) {
 		b.WriteString(fmt.Sprintf("    volumes:\n      - %s:%s\n", db.VolumeName, db.Volume))
 
 		if db.HealthCheck != nil {
+			if err := db.HealthCheck.Validate(); err != nil {
+				return "", fmt.Errorf("unsafe database %s healthcheck: %w", db.Type, err)
+			}
 			b.WriteString("    healthcheck:\n")
 			parts := make([]string, len(db.HealthCheck.Test))
 			for i, t := range db.HealthCheck.Test {
