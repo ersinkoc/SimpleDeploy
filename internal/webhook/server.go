@@ -290,16 +290,16 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Detect the webhook provider from request headers. Even when no secret
+	// is configured we still need the provider to read the correct event
+	// header (X-GitHub-Event vs X-Gitlab-Event vs X-Gitea-Event).
+	p := detectProvider(r.Header)
+
 	// Verify signature/token based on webhook provider
 	if s.Secret != "" {
 		verified := false
-
-		if sig := r.Header.Get("X-Hub-Signature-256"); sig != "" {
-			verified = VerifyGitHubSignature(body, sig, s.Secret)
-		} else if r.Header.Get("X-Gitlab-Token") != "" {
-			verified = VerifyGitLabToken(r, s.Secret)
-		} else if sig := r.Header.Get("X-Gitea-Signature"); sig != "" {
-			verified = VerifyGiteaSignature(body, sig, s.Secret)
+		if p != nil {
+			verified = p.verify(r.Header, body, s.Secret)
 		}
 
 		if !verified {
@@ -317,12 +317,21 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	authenticated := s.Secret != ""
 
 	// Parse event from provider-specific header
-	event := r.Header.Get("X-GitHub-Event")
-	if event == "" {
-		event = r.Header.Get("X-Gitlab-Event")
+	var event string
+	if p != nil {
+		event = p.eventName(r.Header)
 	}
+	// Fallback: when no provider was detected (no signature header was present),
+	// still attempt to read the event header from any known provider so the
+	// event-type gate works even for the "no secret configured" case.
 	if event == "" {
-		event = r.Header.Get("X-Gitea-Event")
+		event = r.Header.Get("X-GitHub-Event")
+		if event == "" {
+			event = r.Header.Get("X-Gitlab-Event")
+		}
+		if event == "" {
+			event = r.Header.Get("X-Gitea-Event")
+		}
 	}
 	push := extractPushInfo(string(body))
 	// Non-branch refs (tags, notes) leave branch empty; the gate below turns

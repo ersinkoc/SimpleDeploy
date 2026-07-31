@@ -126,22 +126,31 @@ func TestExtractPushInfo(t *testing.T) {
 	}
 }
 
-func TestVerifyGitLabToken(t *testing.T) {
+func TestProviderGitLabToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/test", nil)
 	req.Header.Set("X-Gitlab-Token", "my-token")
 
-	if !VerifyGitLabToken(req, "my-token") {
+	// GitLab verification is done via the provider table's verify function.
+	p := detectProvider(req.Header)
+	if p == nil {
+		t.Fatal("detectProvider should find the gitlab provider")
+	}
+	if p.name != "gitlab" {
+		t.Fatalf("provider name = %q, want %q", p.name, "gitlab")
+	}
+	if !p.verify(req.Header, nil, "my-token") {
 		t.Error("Should verify valid GitLab token")
 	}
-	if VerifyGitLabToken(req, "wrong-token") {
+	if p.verify(req.Header, nil, "wrong-token") {
 		t.Error("Should reject wrong GitLab token")
 	}
 }
 
-func TestVerifyGitLabToken_Missing(t *testing.T) {
+func TestProviderGitLabToken_Missing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/test", nil)
-	if VerifyGitLabToken(req, "any") {
-		t.Error("Should reject missing token")
+	// No X-Gitlab-Token header set
+	if detectProvider(req.Header) != nil {
+		t.Error("detectProvider should return nil with no provider headers")
 	}
 }
 

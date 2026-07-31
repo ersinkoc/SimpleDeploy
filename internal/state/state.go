@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ersinkoc/SimpleDeploy/internal/lockfile"
 )
 
 type stateFile interface {
@@ -63,91 +65,23 @@ var (
 	mu        sync.Mutex
 )
 
-// lockStateFile acquires an advisory lock on the state file.
-// This prevents concurrent modifications from different processes.
+// lockStateFile acquires an advisory lock on the state file using the shared
+// lockfile primitive. This prevents concurrent modifications from different
+// processes.
+//
+// The lock uses Spin retry (brief waits, up to 100 attempts) because contending
+// state writers are short-lived (milliseconds) and failing fast would corrupt
+// every concurrent state mutation. Stale locks older than 30 seconds are
+// recovered.
 func lockStateFile() (unlock func(), err error) {
 	lockPath := getStatePath() + ".lock"
-
-	// Create the state directory before opening the lock file in it.
-	//
-	// On a fresh install nothing has created ~/.simpledeploy yet: `init` calls
-	// SaveConfig as its first write, and SaveConfig takes this lock BEFORE
-	// saveStateLocked gets a chance to MkdirAll. The O_CREATE below then failed
-	// with ENOENT, which the retry loop misread as "someone else holds the
-	// lock" — so every fresh `simpledeploy init` spun for a second and died
-	// with "could not acquire state lock after 100 retries", naming a lock that
-	// had never existed. Tests missed it because they all point InitState at a
-	// t.TempDir() that already exists.
-	if err := osMkdirAll(filepath.Dir(lockPath), 0700); err != nil {
-		return nil, fmt.Errorf("failed to create state directory: %w", err)
-	}
-
-	// Unique token identifying THIS acquisition, written into the lock file.
-	// unlock() removes the lock only while it still carries this token. The
-	// previous unconditional os.Remove could delete a lock a DIFFERENT live
-	// process had just created: after a stale lock was recovered by two
-	// waiters, the loser's unlock tore down the winner's fresh lock, cascading
-	// into multiple concurrent writers and silently lost state updates.
-	token := fmt.Sprintf("%d %d\n", os.Getpid(), time.Now().UnixNano())
-
-	for retries := 0; retries < 100; retries++ {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err == nil {
-			// Check the write. An empty or short-written lock file still EXISTS,
-			// so it blocks every other writer, but its content no longer matches
-			// the token — meaning our own unlock would decline to remove it and
-			// the state file would stay locked until the staleness timeout.
-			if _, werr := f.WriteString(token); werr != nil {
-				f.Close()
-				os.Remove(lockPath)
-				return nil, fmt.Errorf("failed to write state lock %s: %w", lockPath, werr)
-			}
-			if cerr := f.Close(); cerr != nil {
-				os.Remove(lockPath)
-				return nil, fmt.Errorf("failed to close state lock %s: %w", lockPath, cerr)
-			}
-			return func() {
-				// Remove only our own lock. If the token no longer matches,
-				// another process recovered ours as stale (a >30s critical
-				// section, which a state save never legitimately is) and now
-				// owns the path — removing it would repeat the cascade above.
-				if data, readErr := os.ReadFile(lockPath); readErr != nil || string(data) != token {
-					return
-				}
-				os.Remove(lockPath)
-			}, nil
-		}
-
-		// Only an already-present lock file is worth waiting on. Anything else
-		// (permission denied, read-only filesystem, a path component that is
-		// not a directory) is permanent, and retrying it for a second before
-		// reporting a generic "could not acquire lock" buries the real cause —
-		// which is exactly how the missing-directory bug above stayed hidden.
-		if !os.IsExist(err) {
-			return nil, fmt.Errorf("failed to create state lock %s: %w", lockPath, err)
-		}
-
-		// Lock file exists, check if stale based on file age
-		info, statErr := os.Stat(lockPath)
-		if statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
-			// Re-stat immediately before removing and require the SAME mtime:
-			// between the stat above and this point another waiter may have
-			// recovered the stale lock and created a fresh one at this path,
-			// and blindly removing would delete that live lock. The remaining
-			// stat→remove window is microseconds and additionally requires a
-			// crashed lock holder plus two concurrent recoverers; the O_EXCL
-			// create that follows still serializes whoever wins.
-			if info2, statErr2 := os.Stat(lockPath); statErr2 == nil &&
-				info2.ModTime().Equal(info.ModTime()) {
-				os.Remove(lockPath)
-			}
-			continue
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	return nil, fmt.Errorf("could not acquire state lock after 100 retries")
+	release, _, err := lockfile.Acquire(lockPath, lockfile.Options{
+		StaleAfter:   30 * time.Second,
+		Retry:        lockfile.Spin,
+		SpinInterval: 10 * time.Millisecond,
+		MaxRetries:   100,
+	})
+	return release, err
 }
 
 func InitState(baseDir string) {

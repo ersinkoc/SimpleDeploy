@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ersinkoc/SimpleDeploy/internal/config"
+	"github.com/ersinkoc/SimpleDeploy/internal/lockfile"
 )
 
 // ErrHeld reports that another process holds the lock. Callers that can
@@ -61,6 +62,12 @@ var (
 // It never blocks: contention returns an error wrapping ErrHeld immediately.
 // Waiting would read as a hang at an interactive prompt, and the one caller
 // that genuinely should wait retries around ErrHeld instead.
+//
+// The core O_EXCL/token-check/stale-recovery logic is delegated to the shared
+// lockfile primitive. This package layers on top: process-wide held-lock
+// tracking (for SIGINT cleanup) and the StaleAfter window sized for deploy
+// operations (90 min — a deploy may run for the docker build timeout plus
+// compose up plus git/image cleanup).
 func Acquire(appName string) (release func(), err error) {
 	// Locks live in the STATE directory, not AppsDir.
 	//
@@ -78,88 +85,42 @@ func Acquire(appName string) (release func(), err error) {
 	// the state itself: two users with different state files are separate
 	// installs with separate apps, not racers.
 	dir := config.HomeDataDir()
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create %s: %w", dir, err)
-	}
 	lockPath := filepath.Join(dir, "."+appName+lockSuffix)
 
-	// pid + nanosecond stamp identifies this acquisition for the token-checked
-	// release below.
-	token := fmt.Sprintf("%d %d\n", os.Getpid(), time.Now().UnixNano())
-
-	for attempt := 0; attempt < 2; attempt++ {
-		f, createErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if createErr == nil {
-			// Write errors are fatal to the acquisition, not ignorable. An
-			// empty or short-written lock file still EXISTS, so it blocks
-			// everyone else, but its content no longer matches our token —
-			// meaning our own release would decline to remove it and the app
-			// would stay locked for StaleAfter. Fail loudly and clean up
-			// instead.
-			if _, werr := f.WriteString(token); werr != nil {
-				f.Close()
-				os.Remove(lockPath)
-				return nil, fmt.Errorf("failed to write deploy lock %s: %w", lockPath, werr)
-			}
-			if serr := f.Sync(); serr != nil {
-				f.Close()
-				os.Remove(lockPath)
-				return nil, fmt.Errorf("failed to flush deploy lock %s: %w", lockPath, serr)
-			}
-			if cerr := f.Close(); cerr != nil {
-				os.Remove(lockPath)
-				return nil, fmt.Errorf("failed to close deploy lock %s: %w", lockPath, cerr)
-			}
-
-			heldMu.Lock()
-			held[lockPath] = token
-			heldMu.Unlock()
-
-			var once sync.Once
-			return func() { once.Do(func() { releaseLock(lockPath, token) }) }, nil
-		}
-		if !os.IsExist(createErr) {
-			return nil, fmt.Errorf("failed to create deploy lock %s: %w", lockPath, createErr)
-		}
-
-		info, statErr := os.Stat(lockPath)
-		if statErr != nil {
-			// Vanished between the failed create and the stat — the holder
-			// released it. Retry.
-			continue
-		}
-		age := time.Since(info.ModTime())
-		if age <= StaleAfter {
-			return nil, fmt.Errorf("%w: %s (lock held %s, %s).\n"+
+	lockRelease, token, err := lockfile.Acquire(lockPath, lockfile.Options{
+		StaleAfter: StaleAfter,
+		Retry:      lockfile.FailFast,
+	})
+	if err != nil {
+		if errors.Is(err, lockfile.ErrHeld) {
+			return nil, fmt.Errorf("%w: %s (lock held %s; %s).\n"+
 				"Wait for it to finish, or check `docker ps` / `simpledeploy logs %s` first — "+
 				"deleting %s while an operation really is running can corrupt the deployment",
-				ErrHeld, appName, age.Round(time.Second), describeHolder(lockPath), appName, lockPath)
+				ErrHeld, appName, lockAge(lockPath), describeHolder(lockPath), appName, lockPath)
 		}
-		// Steal it only if the mtime is unchanged across a re-stat: another
-		// recoverer may have replaced it with a fresh lock in between, and
-		// removing that would let two writers run at once.
-		if info2, statErr2 := os.Stat(lockPath); statErr2 == nil && info2.ModTime().Equal(info.ModTime()) {
-			os.Remove(lockPath)
-		}
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("could not acquire the deploy lock for %q (%s)", appName, lockPath)
-}
-
-// releaseLock removes the lock only while it still carries our token, and stops
-// tracking it either way.
-func releaseLock(lockPath, token string) {
+	// Track this acquisition for the SIGINT/SIGTERM signal handler.
 	heldMu.Lock()
-	delete(held, lockPath)
+	held[lockPath] = token
 	heldMu.Unlock()
 
-	data, err := os.ReadFile(lockPath)
-	if err != nil || string(data) != token {
-		// Someone else owns this path now (ours was recovered as stale).
-		// Removing it would tear down a live holder's lock.
-		return
-	}
-	os.Remove(lockPath)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// Remove from the process-wide registry BEFORE releasing the file
+			// lock. If ReleaseAll runs concurrently, it must not see a stale
+			// entry pointing at a file we already removed — the token check
+			// in ReleaseAll would pass (the file is gone, ReadFile fails, it
+			// skips) but the delete-after-release order is still a race window
+			// where a second ReleaseAll could observe the entry and act on it.
+			heldMu.Lock()
+			delete(held, lockPath)
+			heldMu.Unlock()
+			lockRelease()
+		})
+	}, nil
 }
 
 // InstallSignalCleanup arranges for locks this process holds to be released on
@@ -197,8 +158,28 @@ func ReleaseAll() {
 	heldMu.Unlock()
 
 	for path, token := range snapshot {
-		releaseLock(path, token)
+		// Token-checked release: only remove the lock if it still carries our
+		// token. If someone else now owns the path (ours was recovered as
+		// stale), removing it would tear down a live holder's lock.
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != token {
+			continue
+		}
+		os.Remove(path)
 	}
+}
+
+// lockAge reports how long the lock file at lockPath has been held, based on
+// its mtime — the same source of truth the lockfile primitive's stale
+// recovery uses, so the age shown to the operator matches what "stale" means
+// for this lock. Returns "unknown" if the file cannot be stat-ed (e.g. it
+// vanished between the failed acquire and this message).
+func lockAge(lockPath string) string {
+	info, err := os.Stat(lockPath)
+	if err != nil {
+		return "unknown"
+	}
+	return time.Since(info.ModTime()).Round(time.Second).String()
 }
 
 // describeHolder renders what is known about the current holder.

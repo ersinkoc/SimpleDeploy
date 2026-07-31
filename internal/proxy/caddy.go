@@ -112,32 +112,13 @@ func sortedHeaderKeys(m map[string]string) []string {
 	return keys
 }
 
-// filterCaddyDomain returns the input Caddyfile content with the block for
-// `domain` removed. Used by both RemoveCaddyApp (to delete a block) and
-// AddCaddyApp (to dedupe — calling AddCaddyApp twice for the same domain
-// must not produce two ambiguous routing blocks).
+// filterCaddyDomain is kept as a thin wrapper around the structured parser for
+// backward compatibility with tests that exercise block removal in isolation.
+// Production code uses parseCaddyfile + removeBlock + renderCaddyBlocks directly.
 func filterCaddyDomain(content, domain string) string {
-	lines := strings.Split(content, "\n")
-	result := make([]string, 0, len(lines))
-	skip := false
-	depth := 0
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !skip && (trimmed == domain+" {" || trimmed == domain+"{") {
-			skip = true
-			depth = 1
-			continue
-		}
-		if skip {
-			depth += strings.Count(line, "{") - strings.Count(line, "}")
-			if depth <= 0 {
-				skip = false
-			}
-			continue
-		}
-		result = append(result, line)
-	}
-	return strings.Join(result, "\n")
+	blocks := parseCaddyfile(content)
+	blocks = removeBlock(blocks, domain)
+	return renderCaddyBlocks(blocks)
 }
 
 func SetupCaddy(ctx context.Context, acmeEmail string) error {
@@ -247,52 +228,42 @@ func AddCaddyApp(appName, domain string, port int, headers map[string]string) er
 		}
 		// Values must be validated too, not just escaped: escapeCaddyValue
 		// keeps `{` and `}` intact, but `{...}` is Caddy placeholder syntax
-		// (expanded even inside quotes) and filterCaddyDomain counts braces to
-		// find a block's end — an unbalanced brace in a value makes the next
-		// rewrite swallow the rest of the Caddyfile. Same check the Traefik
-		// path applies in compose.Generate.
+		// (expanded even inside quotes). Same check the Traefik path applies
+		// in compose.Generate.
 		if err := state.ValidateHeaderValue(val); err != nil {
 			return fmt.Errorf("invalid header value for %q in app %q: %w", key, appName, err)
 		}
 	}
 
-	// Dedup: if AddCaddyApp is called twice for the same domain (e.g. on a
-	// redeploy that changes port or headers) the previous block must be
-	// stripped first. Otherwise Caddy would parse two routing blocks for the
-	// same hostname and pick whichever came first, silently masking the
-	// updated config.
-	existing := filterCaddyDomain(string(data), domain)
+	// Parse the existing Caddyfile into structured blocks, then upsert the
+	// app's block. This replaces the old filterCaddyDomain brace-counting
+	// approach: dedup is inherent (upsertBlock replaces by address), and the
+	// global block is never at risk from an empty domain.
+	blocks := parseCaddyfile(string(data))
 
-	var b strings.Builder
-	b.WriteString(existing)
-	if !strings.HasSuffix(existing, "\n") {
-		b.WriteString("\n")
-	}
-	b.WriteString(fmt.Sprintf("\n%s {\n", domain))
-	b.WriteString(fmt.Sprintf("    reverse_proxy qd-%s:%d\n", appName, port))
+	// Build the body lines for this app's site block.
+	var body []string
+	body = append(body, fmt.Sprintf("    reverse_proxy qd-%s:%d", appName, port))
 	// Sorted, for the same reason compose/generator.go sorts every map it
 	// walks: Go randomises map iteration order per run, so an unsorted walk
-	// emitted the header directives in a different order on every deploy. The
-	// Caddyfile is rewritten and reloaded on each one, which turned a no-op
-	// redeploy into a config change — unreviewable diffs, and a proxy reload
-	// that cannot be distinguished from a real one.
+	// emitted the header directives in a different order on every deploy.
 	for _, key := range sortedHeaderKeys(headers) {
-		// Escape the value to prevent Caddyfile injection
 		escapedVal := escapeCaddyValue(headers[key])
-		b.WriteString(fmt.Sprintf("    header %s \"%s\"\n", key, escapedVal))
+		body = append(body, fmt.Sprintf("    header %s \"%s\"", key, escapedVal))
 	}
-	b.WriteString("}\n")
 
-	return writeCaddyfile(caddyfilePath, []byte(b.String()), 0644)
+	blocks = upsertBlock(blocks, domain, body)
+	rendered := renderCaddyBlocks(blocks)
+
+	return writeCaddyfile(caddyfilePath, []byte(rendered), 0644)
 }
 
 func RemoveCaddyApp(domain string) error {
-	// An empty domain is not a harmless no-op here: filterCaddyDomain matches
-	// on `domain+"{"`, so with domain == "" it matches the bare `{` line that
-	// SetupCaddy writes as the Caddyfile's GLOBAL block — deleting the ACME
-	// email configuration, which the caller's ReloadCaddy then makes live.
-	// `remove` reaches this with app.Domain straight from state.json, so a
-	// legacy or hand-edited record with no domain was enough to trigger it.
+	// An empty domain is not a harmless no-op: with the old filterCaddyDomain
+	// it matched the global block's bare `{`. The structured parser makes this
+	// impossible (removeBlock matches on address, which is "" only for the
+	// global block, and we skip global blocks), but validation still runs to
+	// fail fast on a clearly invalid value from a tampered state file.
 	if err := state.ValidateAppDomain(domain); err != nil {
 		return fmt.Errorf("refusing to remove Caddy block for invalid domain %q: %w", domain, err)
 	}
@@ -303,8 +274,11 @@ func RemoveCaddyApp(domain string) error {
 		return err
 	}
 
-	filtered := filterCaddyDomain(string(data), domain)
-	return writeCaddyfile(caddyfilePath, []byte(filtered), 0644)
+	blocks := parseCaddyfile(string(data))
+	blocks = removeBlock(blocks, domain)
+	rendered := renderCaddyBlocks(blocks)
+
+	return writeCaddyfile(caddyfilePath, []byte(rendered), 0644)
 }
 
 func ReloadCaddy() error {
@@ -361,8 +335,9 @@ volumes:
 // setupCaddyWebhookRoute adds (or replaces) the Caddyfile block that publishes
 // the host-side webhook server at https://<baseDomain>/_qd/*.
 //
-// It reuses filterCaddyDomain for dedupe, so re-running `init` rewrites the
-// block rather than stacking a second ambiguous one for the same hostname.
+// Uses the structured block parser: the route block is upserted by address,
+// so re-running `init` replaces the block rather than stacking a second
+// ambiguous one for the same hostname.
 func setupCaddyWebhookRoute(baseDomain string, webhookPort int) error {
 	caddyfilePath := filepath.Join(getProxyDir(), "Caddyfile")
 	data, err := os.ReadFile(caddyfilePath)
@@ -370,22 +345,22 @@ func setupCaddyWebhookRoute(baseDomain string, webhookPort int) error {
 		return fmt.Errorf("failed to read Caddyfile: %w", err)
 	}
 
-	existing := filterCaddyDomain(string(data), baseDomain)
+	blocks := parseCaddyfile(string(data))
 
-	var b strings.Builder
-	b.WriteString(existing)
-	if !strings.HasSuffix(existing, "\n") {
-		b.WriteString("\n")
+	body := []string{
+		"    handle /_qd/* {",
+		fmt.Sprintf("        reverse_proxy host.docker.internal:%d", webhookPort),
+		"    }",
+		// Anything else on the bare base domain is not ours to serve. Answering
+		// 404 explicitly is clearer than Caddy's default behaviour of falling
+		// through to whichever block happens to match.
+		"    handle {",
+		"        respond \"Not Found\" 404",
+		"    }",
 	}
-	b.WriteString(fmt.Sprintf("\n%s {\n", baseDomain))
-	b.WriteString("    handle /_qd/* {\n")
-	b.WriteString(fmt.Sprintf("        reverse_proxy host.docker.internal:%d\n", webhookPort))
-	b.WriteString("    }\n")
-	// Anything else on the bare base domain is not ours to serve. Answering
-	// 404 explicitly is clearer than Caddy's default behaviour of falling
-	// through to whichever block happens to match.
-	b.WriteString("    handle {\n        respond \"Not Found\" 404\n    }\n")
-	b.WriteString("}\n")
 
-	return writeCaddyfile(caddyfilePath, []byte(b.String()), 0644)
+	blocks = upsertBlock(blocks, baseDomain, body)
+	rendered := renderCaddyBlocks(blocks)
+
+	return writeCaddyfile(caddyfilePath, []byte(rendered), 0644)
 }

@@ -3,6 +3,9 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -451,8 +454,9 @@ func TestWriteAskpassScript_ChmodError(t *testing.T) {
 // path. This test proves the behaviour so a future reader does not have to
 // take the comment on faith.
 //
-// The test sets up a real local repo whose fetch target is an unreachable
-// URL, giving git enough work to still be running when we cancel. It then
+// The test sets up a real local repo whose fetch target is a local
+// black-hole HTTP server (accepts the connection but holds the response),
+// giving git enough work to still be running when we cancel. It then
 // verifies that Pull returns with an error rather than hanging — proving
 // the subprocess was killed by ctx.Done, not by completing normally. On
 // Linux the process-group kill is near-instant; on Windows git's child
@@ -472,43 +476,92 @@ func TestPull_CancelledByContext(t *testing.T) {
 		t.Fatalf("Clone failed: %v", err)
 	}
 
-	// Point origin at an unreachable address so fetch blocks long enough for
-	// us to cancel it. A non-routable TEST-NET-1 address ensures the TCP
-	// connect hangs rather than failing instantly.
+	// Point origin at a local black-hole HTTP server: the TCP handshake
+	// completes (so git is reliably mid-request) but the server holds the
+	// response, so fetch blocks until we cancel. A local listener is
+	// deterministic on every platform — a blackholed IP like 192.0.2.1
+	// fails fast with ENETUNREACH on hosts without a default route, which
+	// would make the strict errors.Is(err, context.Canceled) assertion
+	// flaky.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to open black-hole listener: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	// connected is closed the first time the listener accepts a connection.
+	// Accept only returns after the TCP handshake completes, which happens
+	// once git's HTTP child (git-remote-https) has spawned and started its
+	// request — so the channel is a deterministic "the subprocess is
+	// mid-request" signal, unlike a fixed sleep, which races subprocess
+	// startup on loaded CI runners.
+	connected := make(chan struct{})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed during cleanup
+			}
+			select {
+			case <-connected:
+			default:
+				close(connected)
+			}
+			// Hold the connection open and never respond: read and
+			// discard so the socket stays alive until git is killed. The
+			// hold is bounded — after 5 s the server answers 404 and
+			// closes. On Linux the process group is killed at cancel time
+			// so the bound never matters; on Windows the surviving
+			// git-remote-https child keeps Pull's Wait blocked until the
+			// HTTP exchange ends, and an established localhost connection
+			// would otherwise never terminate.
+			go func(c net.Conn) {
+				defer c.Close()
+				_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+				_, _ = io.Copy(io.Discard, c)
+				_, _ = c.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+			}(conn)
+		}
+	}()
 	runGitCmd(t, cloneDir, "remote", "set-url", "origin",
-		"http://192.0.2.1/delayed.git")
+		fmt.Sprintf("http://%s/delayed.git", ln.Addr().String()))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Cancel after a short delay — enough for the subprocess to have started.
+	// Cancel once git is demonstrably mid-request (first connection
+	// accepted). The 10s fallback only fires if git never connects at all,
+	// so the test cannot hang forever even then.
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-connected:
+		case <-time.After(10 * time.Second):
+		}
 		cancel()
 	}()
 
-	start := time.Now()
-	err := Pull(ctx, cloneDir, "master")
-	elapsed := time.Since(start)
+	err = Pull(ctx, cloneDir, "master")
 
 	if err == nil {
 		t.Fatal("Pull should fail when context is cancelled")
 	}
-	// The key assertion: Pull returns with an error, proving ctx cancellation
-	// reached the subprocess. On Linux (CI), exec.CommandContext kills the
-	// process group and Pull returns within milliseconds. On Windows, git
-	// spawns git-remote-https as a child; CommandContext kills only the parent
-	// (not the child holding the TCP connect), so Pull blocks until the OS TCP
-	// retransmission timeout (~21 s). Both platforms still return far sooner
-	// than the ~2 min git would hang without ctx — that is the proof this test
-	// exists to provide.
-	//
-	// We only log on Windows and assert on Linux/CI to avoid a flaky threshold
-	// on a platform-dependent OS behavior that is outside SimpleDeploy's code.
-	if elapsed > 30*time.Second {
-		if runtime.GOOS == "windows" {
-			t.Logf("Pull took %v on Windows (expected: OS TCP timeout, not immediate)", elapsed)
-		} else {
-			t.Errorf("Pull took %v to return after ctx cancel; expected process-group kill on Linux", elapsed)
-		}
+
+	// Prove the subprocess was killed by ctx rather than completing on its
+	// own. Note that errors.Is(err, context.Canceled) does NOT hold here:
+	// os/exec documents that when a killed command exits with a non-success
+	// status, Wait returns the command's usual exit status and drops the
+	// context error. The reliable, threshold-free discriminator is that the
+	// error chain contains an *exec.ExitError from the git subprocess, and
+	// on Unix its process state shows the process was killed, not exited
+	// normally.
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("Pull returned %v; expected an *exec.ExitError from the git subprocess", err)
+	}
+	if runtime.GOOS != "windows" && ee.ProcessState.Exited() {
+		// On Unix a ctx-cancelled git dies by process-group signal; a normal
+		// exit would mean the fetch completed on its own, i.e. ctx was not
+		// honored. On Windows the parent is TerminateProcess'd and the
+		// surviving git-remote-https child reports the fetch error, so this
+		// check is only meaningful where the whole process group is killed.
+		t.Errorf("git subprocess exited normally (%v); expected it to be killed by ctx cancellation", ee.ProcessState)
 	}
 }
