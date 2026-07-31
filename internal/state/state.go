@@ -61,8 +61,7 @@ type State struct {
 }
 
 var (
-	statePath string
-	mu        sync.Mutex
+	mu sync.Mutex
 )
 
 // lockStateFile acquires an advisory lock on the state file using the shared
@@ -84,17 +83,33 @@ func lockStateFile() (unlock func(), err error) {
 	return release, err
 }
 
+// InitState sets the directory holding state.json. It works by setting the
+// SIMPLEDEPLOY_STATE_DIR environment variable, which config.HomeDataDir()
+// reads — so state and applock (which also call HomeDataDir) always agree on
+// where state lives.
+//
+// This replaced a parallel package-level statePath var that was disconnected
+// from config.HomeDataDir(). The divergence caused a real trap: tests called
+// InitState(t.TempDir()) to isolate state.json, but applock.Acquire called
+// config.HomeDataDir() (which read the env var, not statePath) — so per-app
+// lock files landed in the developer's real ~/.simpledeploy until TestMain
+// grew a second mechanism to set the env var. Now there is one knob.
 func InitState(baseDir string) {
 	if baseDir == "" {
 		home, _ := osUserHomeDir()
 		baseDir = filepath.Join(home, ".simpledeploy")
 	}
-	statePath = filepath.Join(baseDir, "state.json")
+	os.Setenv(stateDirEnv, baseDir)
 }
 
+// stateDirEnv mirrors config.StateDirEnv. Declared locally to avoid importing
+// config (which would create a cycle: config has no deps on state, but keeping
+// the const local makes the dependency direction explicit).
+const stateDirEnv = "SIMPLEDEPLOY_STATE_DIR"
+
 func getStatePath() string {
-	if statePath != "" {
-		return statePath
+	if dir := os.Getenv(stateDirEnv); dir != "" {
+		return filepath.Join(dir, "state.json")
 	}
 	home, _ := osUserHomeDir()
 	return filepath.Join(home, ".simpledeploy", "state.json")

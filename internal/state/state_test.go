@@ -212,8 +212,8 @@ func TestInitState_EmptyBaseDir(t *testing.T) {
 	InitState("")
 	home, _ := os.UserHomeDir()
 	expected := filepath.Join(home, ".simpledeploy", "state.json")
-	if statePath != expected {
-		t.Errorf("statePath = %q, want %q", statePath, expected)
+	if got := getStatePath(); got != expected {
+		t.Errorf("getStatePath() = %q, want %q", got, expected)
 	}
 }
 
@@ -221,8 +221,8 @@ func TestInitState_CustomDir(t *testing.T) {
 	customDir := t.TempDir()
 	InitState(customDir)
 	expected := filepath.Join(customDir, "state.json")
-	if statePath != expected {
-		t.Errorf("statePath = %q, want %q", statePath, expected)
+	if got := getStatePath(); got != expected {
+		t.Errorf("getStatePath() = %q, want %q", got, expected)
 	}
 }
 
@@ -343,8 +343,11 @@ func TestFilePermissions(t *testing.T) {
 }
 
 func TestGetStatePath_Fallback(t *testing.T) {
-	// Reset statePath to test fallback
-	statePath = ""
+	// Clear the env var to test fallback to $HOME.
+	oldDir := os.Getenv("SIMPLEDEPLOY_STATE_DIR")
+	os.Unsetenv("SIMPLEDEPLOY_STATE_DIR")
+	defer os.Setenv("SIMPLEDEPLOY_STATE_DIR", oldDir)
+
 	path := getStatePath()
 	home, _ := os.UserHomeDir()
 	expected := filepath.Join(home, ".simpledeploy", "state.json")
@@ -478,15 +481,16 @@ func TestInitState_EmptyBaseDir_Error(t *testing.T) {
 
 	InitState("")
 	expected := filepath.Join("", ".simpledeploy", "state.json")
-	if statePath != expected {
-		t.Errorf("statePath = %q, want %q", statePath, expected)
+	if got := getStatePath(); got != expected {
+		t.Errorf("getStatePath() = %q, want %q", got, expected)
 	}
 }
 
 func TestGetStatePath_Fallback_Error(t *testing.T) {
-	oldStatePath := statePath
-	statePath = ""
-	defer func() { statePath = oldStatePath }()
+	// Clear the env var to test fallback to $HOME.
+	oldDir := os.Getenv("SIMPLEDEPLOY_STATE_DIR")
+	os.Unsetenv("SIMPLEDEPLOY_STATE_DIR")
+	defer os.Setenv("SIMPLEDEPLOY_STATE_DIR", oldDir)
 
 	oldUserHomeDir := osUserHomeDir
 	osUserHomeDir = func() (string, error) {
