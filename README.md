@@ -8,7 +8,7 @@
 
 SimpleDeploy is a zero-dependency PaaS tool written in Go. Give it a Git repo URL and it handles the rest: Docker setup, image build, database provisioning, reverse proxy (Traefik or Caddy), SSL certificates, and push-to-deploy via webhooks.
 
-> **Status: beta.** The full path — deploy → proxy → SSL → webhook → rollback — works end to end as of 0.1.0. It has not yet been run at scale. Back up `~/.simpledeploy/state.json`; it holds your encrypted tokens and database passwords.
+> **Status: beta.** The full path — deploy → proxy → SSL → webhook → rollback — works end to end as of 0.1.1, including the opt-in Docker integration suite. It has not yet been run at scale. Back up `~/.simpledeploy/state.json`; it holds your encrypted tokens and database passwords.
 
 ## Philosophy
 
@@ -232,7 +232,7 @@ on an unprivileged CI runner. `make test` skips them. To run everything:
 make test-integration   # SIMPLEDEPLOY_INTEGRATION=1 go test -p=1 -count=1 ./...
 ```
 
-They also run weekly and on demand via the **Integration Tests** workflow.
+The full opt-in suite passed for `v0.1.1` and also runs weekly and on demand via the **Integration Tests** workflow.
 
 Version is stamped at link time from the Makefile, so `simpledeploy version` always matches the build.
 
@@ -262,7 +262,7 @@ docker build -t simpledeploy:latest .
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md). Release 0.1.0 is an audit release; read it before upgrading from 0.0.x, as several defaults changed.
+See [CHANGELOG.md](CHANGELOG.md). Latest release is `v0.1.1`; `0.1.0` remains the main audit release and is worth reading before upgrading from 0.0.x, as several defaults changed.
 
 ## Upgrading from 0.0.x
 
