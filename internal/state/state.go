@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ersinkoc/SimpleDeploy/internal/config"
 	"github.com/ersinkoc/SimpleDeploy/internal/lockfile"
 )
 
@@ -84,9 +85,9 @@ func lockStateFile() (unlock func(), err error) {
 }
 
 // InitState sets the directory holding state.json. It works by setting the
-// SIMPLEDEPLOY_STATE_DIR environment variable, which config.HomeDataDir()
-// reads — so state and applock (which also call HomeDataDir) always agree on
-// where state lives.
+// SIMPLEDEPLOY_STATE_DIR environment variable (config.StateDirEnv), which
+// config.HomeDataDir() reads — so state and applock (which also call
+// HomeDataDir) always agree on where state lives.
 //
 // This replaced a parallel package-level statePath var that was disconnected
 // from config.HomeDataDir(). The divergence caused a real trap: tests called
@@ -99,16 +100,11 @@ func InitState(baseDir string) {
 		home, _ := osUserHomeDir()
 		baseDir = filepath.Join(home, ".simpledeploy")
 	}
-	os.Setenv(stateDirEnv, baseDir)
+	os.Setenv(config.StateDirEnv, baseDir)
 }
 
-// stateDirEnv mirrors config.StateDirEnv. Declared locally to avoid importing
-// config (which would create a cycle: config has no deps on state, but keeping
-// the const local makes the dependency direction explicit).
-const stateDirEnv = "SIMPLEDEPLOY_STATE_DIR"
-
 func getStatePath() string {
-	if dir := os.Getenv(stateDirEnv); dir != "" {
+	if dir := os.Getenv(config.StateDirEnv); dir != "" {
 		return filepath.Join(dir, "state.json")
 	}
 	home, _ := osUserHomeDir()

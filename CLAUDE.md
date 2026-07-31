@@ -155,8 +155,9 @@ the real generators perform).
   and `CleanupOldImages` trusts that as recency; a local-time stamp repeats an
   hour at DST fall-back and breaks the ordering.
 - **Header values must not contain braces.** `{...}` is Caddy placeholder
-  syntax (expanded even inside quotes), and `filterCaddyDomain` finds a block's
-  end by counting braces — an unbalanced one swallows the rest of the Caddyfile.
+  syntax (expanded even inside quotes), and the structured Caddyfile parser
+  tracks brace depth — an unbalanced one desynchronises the count and swallows
+  the rest of the Caddyfile.
 - **`lockStateFile` creates the state directory before opening the lock.** It
   runs before `saveStateLocked`'s `MkdirAll`, so on a fresh install the lock
   open returned ENOENT, which the retry loop misread as contention — every

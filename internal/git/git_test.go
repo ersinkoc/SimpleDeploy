@@ -458,9 +458,11 @@ func TestWriteAskpassScript_ChmodError(t *testing.T) {
 // black-hole HTTP server (accepts the connection but holds the response),
 // giving git enough work to still be running when we cancel. It then
 // verifies that Pull returns with an error rather than hanging — proving
-// the subprocess was killed by ctx.Done, not by completing normally. On
-// Linux the process-group kill is near-instant; on Windows git's child
-// process (git-remote-https) survives until the OS TCP timeout (~21 s).
+// the subprocess was killed by ctx.Done, not by completing normally.
+// CommandContext kills only the direct child (git); the surviving HTTP
+// helper (git-remote-https) keeps Pull's output pipes open until the
+// server's bounded hold (5 s, below) ends the exchange, so this test
+// takes a few seconds on every platform instead of returning instantly.
 func TestPull_CancelledByContext(t *testing.T) {
 	// Set up a clone of a local repo so we have a valid working tree.
 	repoDir := t.TempDir()
@@ -509,11 +511,12 @@ func TestPull_CancelledByContext(t *testing.T) {
 			// Hold the connection open and never respond: read and
 			// discard so the socket stays alive until git is killed. The
 			// hold is bounded — after 5 s the server answers 404 and
-			// closes. On Linux the process group is killed at cancel time
-			// so the bound never matters; on Windows the surviving
-			// git-remote-https child keeps Pull's Wait blocked until the
-			// HTTP exchange ends, and an established localhost connection
-			// would otherwise never terminate.
+			// closes. CommandContext kills only the direct child (git),
+			// so on every platform the surviving git-remote-https child
+			// keeps Pull's Wait blocked until the HTTP exchange ends; an
+			// established localhost connection would otherwise never
+			// terminate and the test would die to go test's timeout
+			// instead of asserting.
 			go func(c net.Conn) {
 				defer c.Close()
 				_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -557,11 +560,13 @@ func TestPull_CancelledByContext(t *testing.T) {
 		t.Fatalf("Pull returned %v; expected an *exec.ExitError from the git subprocess", err)
 	}
 	if runtime.GOOS != "windows" && ee.ProcessState.Exited() {
-		// On Unix a ctx-cancelled git dies by process-group signal; a normal
-		// exit would mean the fetch completed on its own, i.e. ctx was not
-		// honored. On Windows the parent is TerminateProcess'd and the
-		// surviving git-remote-https child reports the fetch error, so this
-		// check is only meaningful where the whole process group is killed.
+		// On Unix, CommandContext kills the direct child (git) with SIGKILL,
+		// so Exited()==false proves the subprocess was killed by ctx
+		// cancellation; a normal exit would mean the fetch completed on its
+		// own. On Windows the kill is TerminateProcess, whose exit status is
+		// indistinguishable from a natural failure (and whose surviving
+		// git-remote-https child reports the fetch error), so this check is
+		// only meaningful where a signal kill is observable.
 		t.Errorf("git subprocess exited normally (%v); expected it to be killed by ctx cancellation", ee.ProcessState)
 	}
 }

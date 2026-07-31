@@ -623,8 +623,8 @@ func TestValidateHeaderValue_Invalid(t *testing.T) {
 //
 //   - `{...}` is Caddy's placeholder syntax and is expanded inside quoted
 //     strings too, so the value sent on the wire is not the one configured.
-//   - proxy.filterCaddyDomain locates the end of a site block by counting `{`
-//     against `}`. An unbalanced brace desynchronises that count, so removing
+//   - proxy.parseCaddyfile tracks brace depth across the full file.
+//     An unbalanced brace desynchronises that count, so removing
 //     or replacing the block — which AddCaddyApp does on every deploy —
 //     swallows the remainder of the Caddyfile and every other app's routing
 //     with it.

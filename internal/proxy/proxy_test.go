@@ -890,8 +890,8 @@ func TestEscapeCaddyValue_Security(t *testing.T) {
 // TestAddCaddyApp_HeaderInjection tests that AddCaddyApp rejects header
 // values that could be used for Caddyfile injection. Escaping alone is not
 // enough: `{`/`}` survive escapeCaddyValue, `{...}` is Caddy placeholder
-// syntax even inside quotes, and an unbalanced brace corrupts
-// filterCaddyDomain's block-end counting — so such values are refused
+// syntax even inside quotes, and an unbalanced brace corrupts the
+// structured parser's brace-depth tracking — so such values are refused
 // outright (mirroring state.ValidateHeaderValue on the Traefik path), and
 // the Caddyfile must be left untouched.
 func TestAddCaddyApp_HeaderInjection(t *testing.T) {
@@ -1263,11 +1263,11 @@ func TestFilterCaddyDomain_NoMatch(t *testing.T) {
 // TestRemoveCaddyApp_RejectsEmptyDomain pins that an app record with no domain
 // cannot destroy the Caddyfile's global block.
 //
-// filterCaddyDomain matches on `domain+"{"`, so with an empty domain it matched
-// the bare `{` line SetupCaddy writes as the global block — deleting the ACME
-// email configuration, which the caller's ReloadCaddy then made live. `remove`
-// reaches this with app.Domain straight from state.json, so a legacy or
-// hand-edited record was enough to trigger it.
+// The old filterCaddyDomain matched on `domain+"{"`, so with an empty domain it
+// matched the bare `{` line SetupCaddy writes as the global block. The
+// structured parser makes this structurally impossible (removeBlock matches on
+// address, which is "" only for the global block, and skips global blocks), but
+// validation still runs to fail fast on a clearly invalid value.
 func TestRemoveCaddyApp_RejectsEmptyDomain(t *testing.T) {
 	dir := setupTestProxyDir(t)
 	caddyfilePath := filepath.Join(dir, "Caddyfile")

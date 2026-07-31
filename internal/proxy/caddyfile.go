@@ -158,15 +158,23 @@ func removeBlock(blocks []caddyBlock, address string) []caddyBlock {
 }
 
 // upsertBlock adds or replaces the site block for address. If a block with
-// the same address exists, it is replaced; otherwise the new block is
-// appended.
+// the same address exists, ALL matching blocks are replaced with a single
+// new one (dedup); otherwise the new block is appended.
+//
+// Dedup-on-replace matters: parseCaddyfile can return stacked duplicate
+// blocks if the input file already had them (e.g. from a hand-edit or a
+// pre-parser bug). The old loop copied the replacement for every match,
+// producing N copies instead of 1.
 func upsertBlock(blocks []caddyBlock, address string, body []string) []caddyBlock {
 	result := make([]caddyBlock, 0, len(blocks)+1)
 	replaced := false
 	for _, blk := range blocks {
 		if !blk.isGlobal && blk.address == address {
-			result = append(result, caddyBlock{address: address, body: body})
-			replaced = true
+			if !replaced {
+				result = append(result, caddyBlock{address: address, body: body})
+				replaced = true
+			}
+			// Skip additional duplicates — only one block per address survives.
 			continue
 		}
 		result = append(result, blk)
