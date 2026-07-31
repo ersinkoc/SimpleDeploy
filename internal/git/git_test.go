@@ -529,6 +529,7 @@ func TestPull_CancelledByContext(t *testing.T) {
 		fmt.Sprintf("http://%s/delayed.git", ln.Addr().String()))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Cancel once git is demonstrably mid-request (first connection
 	// accepted). The 10s fallback only fires if git never connects at all,
