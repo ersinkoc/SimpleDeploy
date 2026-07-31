@@ -4,6 +4,17 @@ All notable changes to SimpleDeploy will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-31
+
+Patch release for the post-release verification fixes:
+
+- The Docker-backed E2E test now waits for asynchronous webhook deploy goroutines
+  before cleanup, preventing leaked `qd-e2eprobe` containers and cross-test output
+  pollution in the full opt-in integration suite.
+- The machine-ID fallback test now forces both Linux machine-id reads to miss
+  before asserting the hostname/user fallback, so CI and local runs exercise the
+  same branch.
+
 Second audit pass, from a file-by-file review of every production source file
 plus four independent adversarial reviews (concurrency, injection surface, CLI
 flow logic, webhook protocol correctness against provider documentation) — then

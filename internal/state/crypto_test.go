@@ -216,6 +216,12 @@ func TestGetMachineKey(t *testing.T) {
 }
 
 func TestGetMachineID_HostnameError(t *testing.T) {
+	oldReadFile := osReadFile
+	osReadFile = func(name string) ([]byte, error) {
+		return nil, os.ErrNotExist
+	}
+	defer func() { osReadFile = oldReadFile }()
+
 	oldHostname := osHostname
 	osHostname = func() (string, error) {
 		return "", errors.New("hostname error")
