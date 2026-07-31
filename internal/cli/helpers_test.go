@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -851,6 +852,200 @@ func TestRoute_RedeployWithoutArgs(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "application name") && !strings.Contains(err.Error(), "app-name") {
 		t.Errorf("Error should mention application name required, got: %v", err)
+	}
+}
+
+func TestRunList_JSON(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	app := state.NewAppConfig()
+	app.Name = "jsonapp"
+	app.Port = 3000
+	app.Type = "node"
+	app.Domain = "jsonapp.example.com"
+	app.Repo = "https://github.com/test/jsonapp.git"
+	app.CurrentImage = "jsonapp:v1"
+	app.Status = "running"
+	app.Databases = []string{"mysql", "redis"}
+	app.LastDeploy = "2025-01-01T00:00:00Z"
+	app.DeployCount = 2
+
+	if err := state.SaveApp(app); err != nil {
+		t.Fatalf("SaveApp failed: %v", err)
+	}
+
+	output := captureStdout(func() {
+		if err := RunList([]string{"--json"}); err != nil {
+			t.Errorf("RunList --json returned error: %v", err)
+		}
+	})
+
+	var apps []listAppJSON
+	if err := json.Unmarshal([]byte(output), &apps); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	a := apps[0]
+	if a.Name != "jsonapp" {
+		t.Errorf("name = %q, want %q", a.Name, "jsonapp")
+	}
+	if a.Domain != "jsonapp.example.com" {
+		t.Errorf("domain = %q", a.Domain)
+	}
+	if a.Port != 3000 {
+		t.Errorf("port = %d, want 3000", a.Port)
+	}
+	if a.Image != "jsonapp:v1" {
+		t.Errorf("image = %q", a.Image)
+	}
+	if a.Status != "running" {
+		t.Errorf("status = %q", a.Status)
+	}
+	if a.Deploys != 2 {
+		t.Errorf("deploys = %d, want 2", a.Deploys)
+	}
+	if len(a.Databases) != 2 || a.Databases[0] != "mysql" || a.Databases[1] != "redis" {
+		t.Errorf("databases = %v, want [mysql redis]", a.Databases)
+	}
+}
+
+func TestRunList_JSON_Empty(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	output := captureStdout(func() {
+		if err := RunList([]string{"--json"}); err != nil {
+			t.Errorf("RunList --json returned error: %v", err)
+		}
+	})
+
+	var apps []listAppJSON
+	if err := json.Unmarshal([]byte(output), &apps); err != nil {
+		t.Fatalf("empty list should be valid JSON array: %v\noutput:\n%s", err, output)
+	}
+	if len(apps) != 0 {
+		t.Errorf("expected empty array, got %d items", len(apps))
+	}
+}
+
+func TestRunList_JSON_ParsesAsArray(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	for _, name := range []string{"zapp", "bapp", "aapp"} {
+		app := state.NewAppConfig()
+		app.Name = name
+		app.Domain = name + ".example.com"
+		app.Status = "running"
+		if err := state.SaveApp(app); err != nil {
+			t.Fatalf("SaveApp %s failed: %v", name, err)
+		}
+	}
+
+	output := captureStdout(func() {
+		if err := RunList([]string{"--json"}); err != nil {
+			t.Errorf("RunList --json returned error: %v", err)
+		}
+	})
+
+	var apps []listAppJSON
+	if err := json.Unmarshal([]byte(output), &apps); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+
+	// Apps must be sorted by name.
+	if len(apps) != 3 {
+		t.Fatalf("expected 3 apps, got %d", len(apps))
+	}
+	if apps[0].Name != "aapp" || apps[1].Name != "bapp" || apps[2].Name != "zapp" {
+		var names []string
+		for _, a := range apps {
+			names = append(names, a.Name)
+		}
+		t.Errorf("apps not sorted: %v", names)
+	}
+}
+
+func TestRunStatus_JSON(t *testing.T) {
+	dir := t.TempDir()
+	state.InitState(dir)
+
+	cfg := &state.GlobalConfig{
+		Proxy:       "caddy",
+		BaseDomain:  "json.example.com",
+		AcmeEmail:   "test@example.com",
+		WebhookPort: 9000,
+	}
+	if err := state.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	app := state.NewAppConfig()
+	app.Name = "statusjson"
+	app.Domain = "statusjson.json.example.com"
+	app.Status = "running"
+	if err := state.SaveApp(app); err != nil {
+		t.Fatalf("SaveApp failed: %v", err)
+	}
+
+	output := captureStdout(func() {
+		if err := RunStatus([]string{"--json"}); err != nil {
+			t.Errorf("RunStatus --json returned error: %v", err)
+		}
+	})
+
+	var st statusJSON
+	if err := json.Unmarshal([]byte(output), &st); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+
+	if st.Proxy != "caddy" {
+		t.Errorf("proxy = %q, want %q", st.Proxy, "caddy")
+	}
+	if st.BaseDomain != "json.example.com" {
+		t.Errorf("base_domain = %q", st.BaseDomain)
+	}
+	if st.AcmeEmail != "test@example.com" {
+		t.Errorf("acme_email = %q", st.AcmeEmail)
+	}
+	if st.Webhook != 9000 {
+		t.Errorf("webhook_port = %d, want 9000", st.Webhook)
+	}
+	if st.ProxyContainer != "qd-caddy" {
+		t.Errorf("proxy_container = %q, want %q", st.ProxyContainer, "qd-caddy")
+	}
+	if len(st.Apps) != 1 {
+		t.Fatalf("expected 1 app in status, got %d", len(st.Apps))
+	}
+	if st.Apps[0].Name != "statusjson" {
+		t.Errorf("app name = %q, want %q", st.Apps[0].Name, "statusjson")
+	}
+	if st.Apps[0].Domain != "statusjson.json.example.com" {
+		t.Errorf("app domain = %q", st.Apps[0].Domain)
+	}
+}
+
+func TestRunList_UnknownFlag(t *testing.T) {
+	err := RunList([]string{"--bogus"})
+	if err == nil {
+		t.Error("should reject unknown flag")
+	}
+	if !strings.Contains(err.Error(), "unknown option") {
+		t.Errorf("error should mention unknown option, got: %v", err)
+	}
+}
+
+func TestRunStatus_UnknownFlag(t *testing.T) {
+	err := RunStatus([]string{"--bogus"})
+	if err == nil {
+		t.Error("should reject unknown flag")
+	}
+	if !strings.Contains(err.Error(), "unknown option") {
+		t.Errorf("error should mention unknown option, got: %v", err)
 	}
 }
 
