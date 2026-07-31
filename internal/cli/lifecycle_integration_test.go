@@ -122,7 +122,7 @@ func TestLifecycle_EveryCommandAgainstRealDocker(t *testing.T) {
 
 	// ---- list / status ----------------------------------------------------
 	listOut := captureStdout(func() {
-		if err := RunList(); err != nil {
+		if err := RunList(nil); err != nil {
 			t.Errorf("RunList: %v", err)
 		}
 	})
@@ -131,7 +131,7 @@ func TestLifecycle_EveryCommandAgainstRealDocker(t *testing.T) {
 	}
 
 	statusOut := captureStdout(func() {
-		if err := RunStatus(); err != nil {
+		if err := RunStatus(nil); err != nil {
 			t.Errorf("RunStatus: %v", err)
 		}
 	})

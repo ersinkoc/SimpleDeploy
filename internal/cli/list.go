@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -21,10 +23,57 @@ func sortedAppNames[T any](apps map[string]T) []string {
 	return names
 }
 
-func RunList() error {
+// listAppJSON is the machine-readable representation of one app in `list --json`.
+// It mirrors the fields shown in the human format, with stable JSON keys.
+type listAppJSON struct {
+	Name      string   `json:"name"`
+	Domain    string   `json:"domain"`
+	Type      string   `json:"type"`
+	Image     string   `json:"image"`
+	Port      int      `json:"port"`
+	Databases []string `json:"databases,omitempty"`
+	Webhook   bool     `json:"webhook"`
+	Deploys   int      `json:"deploys"`
+	Last      string   `json:"last_deploy"`
+	Status    string   `json:"status"`
+}
+
+func RunList(args []string) error {
+	jsonOutput := false
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOutput = true
+		default:
+			return fmt.Errorf("unknown option %q. Usage: simpledeploy list [--json]", arg)
+		}
+	}
+
 	s, err := stateLoad()
 	if err != nil {
 		return err
+	}
+
+	if jsonOutput {
+		apps := make([]listAppJSON, 0, len(s.Apps))
+		for _, name := range sortedAppNames(s.Apps) {
+			app := s.Apps[name]
+			apps = append(apps, listAppJSON{
+				Name:      app.Name,
+				Domain:    app.Domain,
+				Type:      app.Type,
+				Image:     app.CurrentImage,
+				Port:      app.Port,
+				Databases: app.Databases,
+				Webhook:   app.WebhookEnabled,
+				Deploys:   app.DeployCount,
+				Last:      app.LastDeploy,
+				Status:    app.Status,
+			})
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(apps)
 	}
 
 	if len(s.Apps) == 0 {

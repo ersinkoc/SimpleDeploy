@@ -494,7 +494,7 @@ func TestRunStatus_WithCaddy(t *testing.T) {
 	state.InitState(dir)
 	state.SaveConfig(&state.GlobalConfig{Proxy: "caddy", BaseDomain: "example.com", AcmeEmail: "test@example.com", WebhookPort: 9000})
 	output := captureStdout(func() {
-		if err := RunStatus(); err != nil {
+		if err := RunStatus(nil); err != nil {
 			t.Errorf("RunStatus failed: %v", err)
 		}
 	})
@@ -510,7 +510,7 @@ func TestRunStatus_LoadError(t *testing.T) {
 	old := stateLoad
 	stateLoad = func() (*state.State, error) { return nil, errors.New("fail") }
 	defer func() { stateLoad = old }()
-	if err := RunStatus(); err == nil {
+	if err := RunStatus(nil); err == nil {
 		t.Error("Expected error")
 	}
 }
@@ -523,7 +523,7 @@ func TestRunList_LoadError(t *testing.T) {
 	old := stateLoad
 	stateLoad = func() (*state.State, error) { return nil, errors.New("fail") }
 	defer func() { stateLoad = old }()
-	if err := RunList(); err == nil {
+	if err := RunList(nil); err == nil {
 		t.Error("Expected error")
 	}
 }
@@ -535,7 +535,7 @@ func TestRunList_StoppedStatus(t *testing.T) {
 	app.Name = "sapp"
 	app.Status = "stopped"
 	state.SaveApp(app)
-	_ = captureStdout(func() { RunList() })
+	_ = captureStdout(func() { RunList(nil) })
 }
 
 func TestRunList_DefaultStatus(t *testing.T) {
@@ -545,7 +545,7 @@ func TestRunList_DefaultStatus(t *testing.T) {
 	app.Name = "dapp"
 	app.Status = "unknown"
 	state.SaveApp(app)
-	_ = captureStdout(func() { RunList() })
+	_ = captureStdout(func() { RunList(nil) })
 }
 
 func TestRunList_WithDBs(t *testing.T) {
@@ -556,7 +556,7 @@ func TestRunList_WithDBs(t *testing.T) {
 	app.Status = "running"
 	app.Databases = []string{"mysql"}
 	state.SaveApp(app)
-	_ = captureStdout(func() { RunList() })
+	_ = captureStdout(func() { RunList(nil) })
 }
 
 // ------------------------------------------------------------------

@@ -743,7 +743,7 @@ func TestRunList_WithApps(t *testing.T) {
 	}
 
 	output := captureStdout(func() {
-		err := RunList()
+		err := RunList(nil)
 		if err != nil {
 			t.Errorf("RunList returned error: %v", err)
 		}
@@ -765,7 +765,7 @@ func TestRunList_Empty(t *testing.T) {
 	state.InitState(dir)
 
 	output := captureStdout(func() {
-		err := RunList()
+		err := RunList(nil)
 		if err != nil {
 			t.Errorf("RunList returned error: %v", err)
 		}
@@ -803,7 +803,7 @@ func TestRunStatus_WithState(t *testing.T) {
 	}
 
 	output := captureStdout(func() {
-		err := RunStatus()
+		err := RunStatus(nil)
 		if err != nil {
 			t.Errorf("RunStatus returned error: %v", err)
 		}

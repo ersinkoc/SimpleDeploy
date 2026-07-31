@@ -26,11 +26,11 @@ func PrintUsage() {
 	fmt.Println()
 	fmt.Println("Setup:")
 	fmt.Println("  init                First-time setup (interactive wizard)")
-	fmt.Println("  status              Show proxy and application status")
+	fmt.Println("  status [--json]     Show proxy and application status (--json for machine-readable output)")
 	fmt.Println()
 	fmt.Println("Applications:")
 	fmt.Println("  deploy              Deploy a new application (interactive)")
-	fmt.Println("  list                List deployed applications")
+	fmt.Println("  list [--json]       List deployed applications (--json for machine-readable output)")
 	fmt.Println("  redeploy <app>      Rebuild and restart an application")
 	fmt.Println("  restart <app>       Restart an application's container")
 	fmt.Println("  stop <app>          Stop an application")
@@ -69,7 +69,7 @@ func Route(args []string) error {
 	case "deploy":
 		return RunDeploy()
 	case "list", "ls":
-		return RunList()
+		return RunList(cmdArgs)
 	case "redeploy":
 		return RunRedeploy(cmdArgs)
 	case "remove", "rm":
@@ -83,7 +83,7 @@ func Route(args []string) error {
 	case "logs":
 		return RunLogs(cmdArgs)
 	case "status":
-		return RunStatus()
+		return RunStatus(cmdArgs)
 	case "service":
 		return RunService(cmdArgs)
 	case "webhook":
