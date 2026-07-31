@@ -135,7 +135,7 @@ func TestEndToEnd_DeployPushRedeployRollback(t *testing.T) {
 	assertServes(t, containerName, "APP_V1")
 
 	// --- 2. push -> redeploy, over real HTTP -------------------------------
-	srvURL := startWebhookServer(t, secret)
+	srvURL, waitWebhookDeploys := startWebhookServer(t, secret)
 
 	writeServingApp(t, repoDir, "APP_V2") // "someone pushed"
 	postPush(t, srvURL, appName, secret, `{"ref":"refs/heads/main"}`, http.StatusOK)
@@ -168,6 +168,8 @@ func TestEndToEnd_DeployPushRedeployRollback(t *testing.T) {
 	waitFor(t, 240*time.Second, "rollback to restore the previous deployment", func() bool {
 		return servesMarker(containerName, "APP_V2")
 	})
+
+	waitWebhookDeploys()
 
 	app, err = state.GetApp(appName)
 	if err != nil {
@@ -256,7 +258,7 @@ func installCopyingGit(t *testing.T, src string) {
 
 // startWebhookServer runs a real webhook server wired to the real redeploy
 // handler, and returns its base URL.
-func startWebhookServer(t *testing.T, secret string) string {
+func startWebhookServer(t *testing.T, secret string) (string, func()) {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -281,7 +283,7 @@ func startWebhookServer(t *testing.T, secret string) string {
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	})
-	return base
+	return base, srv.WaitDeploys
 }
 
 // postPush delivers a signed GitHub-style push over real HTTP.

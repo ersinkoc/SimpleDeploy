@@ -163,6 +163,11 @@ func (s *Server) SetDeployHandler(handler func(ctx context.Context, appName stri
 	s.deploy = handler
 }
 
+// WaitDeploys blocks until all deploy goroutines accepted by this server have returned.
+func (s *Server) WaitDeploys() {
+	s.deployWg.Wait()
+}
+
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_qd/webhook/", s.handleWebhook)
