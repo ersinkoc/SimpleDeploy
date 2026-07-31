@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-coverage race clean release docker docker-build docker-push lint verify fmt
+.PHONY: build test test-integration test-coverage race clean release docker docker-build docker-push lint verify prove fmt
 
 BINARY := simpledeploy
 VERSION := 0.1.0
@@ -37,6 +37,14 @@ race:
 # the first. Run this before pushing.
 verify:
 	sh scripts/verify.sh
+
+# The slow, complete evidence run: every CI gate on this platform AND in a Linux
+# container matching CI's Go version and non-root user, gosec with the
+# workflow's exact arguments, and the Docker-backed suites that prove behaviour
+# rather than text. Twice now a fully green local run has hidden a defect that
+# only this catches — see the header of scripts/prove.sh.
+prove:
+	sh scripts/prove.sh
 
 clean:
 	rm -f $(BINARY) coverage.out

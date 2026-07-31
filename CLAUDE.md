@@ -324,6 +324,15 @@ the real generators perform).
   build ./...` settles it.
 - **Run gosec with the workflow's exact arguments** (`.github/workflows/
   security.yml`); it is a push-triggered gate that nothing else covers.
+- **`exit status 0xc0000142` on Windows is environmental, not a code failure.**
+  It is STATUS_DLL_INIT_FAILED — process creation failing at the OS level under
+  heavy parallel load. The tell: it hits arbitrary spawned processes including
+  Go's own `link.exe` ("[build failed]" across every package at once). Re-run
+  the stage on an idle machine before treating any of it as a real result.
+- **`make prove` (scripts/prove.sh) runs the whole battery in one command** —
+  both platforms, non-root Linux at CI's Go version, race with cgo, gosec, the
+  full integration suite, and the binary smoke tests. Skips are reported, never
+  silently passed.
 
 ### Known limitations (deliberate, not defects)
 
