@@ -40,3 +40,8 @@ dist/
 AGENTS.md
 GEMINI.md
 .github/copilot-instructions.md
+
+.wrongstack/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json

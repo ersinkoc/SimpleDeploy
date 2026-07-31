@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +29,8 @@ var ErrHeld = errors.New("another process holds the lock")
 // ErrTimeout reports that the retry budget was exhausted before the lock
 // became available.
 var ErrTimeout = errors.New("timed out waiting for lock")
+
+var tokenSeq atomic.Uint64
 
 // RetryPolicy controls how Acquire retries on contention.
 type RetryPolicy int
@@ -90,7 +93,7 @@ func Acquire(path string, opts Options) (release func(), token string, err error
 		return nil, "", fmt.Errorf("failed to create directory for %s: %w", path, err)
 	}
 
-	token = fmt.Sprintf("%d %d\n", os.Getpid(), time.Now().UnixNano())
+	token = fmt.Sprintf("%d %d %d\n", os.Getpid(), time.Now().UnixNano(), tokenSeq.Add(1))
 
 	maxAttempts := 2 // FailFast: 1 initial + 1 retry after stale recovery
 	if opts.Retry == Spin {
